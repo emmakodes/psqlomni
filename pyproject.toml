@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "psqlomni"
+version = "0.1.0"
+description = ""
+authors = ["emmakodes <emmamichael65@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+langchain = "0.2.0rc2"
+langchain-community = "^0.0.38"
+langchain-openai = "^0.1.7"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
