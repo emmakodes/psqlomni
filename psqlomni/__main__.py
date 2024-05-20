@@ -3,19 +3,34 @@ from datetime import datetime
 import importlib.metadata
 import json
 import os
+import sys
 import psycopg2
 import toml
 from prompt_toolkit import PromptSession, prompt
 from halo import Halo
 from sqlalchemy import create_engine
 from langchain_community.utilities import SQLDatabase
+from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_openai import ChatOpenAI
-from langchain_community.agent_toolkits import create_sql_agent
-from typing import Any
-import subprocess
+from langchain.agents.agent import AgentExecutor
+from langchain_community.agent_toolkits.sql.prompt import SQL_FUNCTIONS_SUFFIX
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from langchain_core.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    MessagesPlaceholder,
+)
+from langchain.agents import tool
+from langchain.agents.format_scratchpad.openai_tools import format_to_openai_tool_messages
+from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
+
+
 
 GPT_MODEL3="gpt-3.5-turbo-0125" # "gpt-3.5-turbo-1106"
 GPT_MODEL4="gpt-4-1106-preview"
+
+
+chat_history = []
 
 # Replace these with your specific database credentials
 
@@ -26,8 +41,6 @@ class PSqlomni:
         self.load_config()
         self.llm:ChatOpenAI
         self.db: SQLDatabase = None
-        self.spinned_up_db_name:str
-        self.container_name:str
 
         args = self.parse_args()
 
@@ -78,50 +91,18 @@ class PSqlomni:
 
             self.save_config()
 
-        # still iterating other options for below process 
-        print('Setting up Docker to spin up isolated instances of the database')
-        if not self.is_postgres_image_pulled():
-            print("PostgreSQL Docker image is not pulled. Pulling now...")
-            subprocess.run(['docker', 'pull', 'postgres'])
-        else:
-            print("PostgreSQL Docker image is already pulled.")
-
-        # Run PostgreSQL container
-        self.container_name = 'my_postgres_db_x3F9k2PqY_5tRzU1'
-        self.spinned_up_db_name = f'{db_name}_x3F9k2PqY_5tRzU1'
-        spinned_up_db_username = db_username
-        spinned_up_db_password = db_password
-        spinned_up_port_number = 5433 
-        spinned_up_db_host = 'localhost'
-
-        print(f'running {self.container_name} container')
-        subprocess.run(['docker', 'run', '--name', self.container_name, '-e', f'POSTGRES_DB={self.spinned_up_db_name}', '-e', f'POSTGRES_USER={spinned_up_db_username}', '-e', f'POSTGRES_PASSWORD={spinned_up_db_password}', '-d', '-p', f'{spinned_up_port_number}:5432', 'postgres'])
-        print('dumping data')
-        print('Enter your database password')
-        # Dump data from original database
-        subprocess.run(['pg_dump', '-U', db_username, '-d', db_name, '-h', db_host, '-Fc', '-f', f'backup_{self.spinned_up_db_name}.dump'])
-        print(f'copying dump to {self.container_name}:backup_{self.spinned_up_db_name}.dump')
-        # Copy dump file into Docker container
-        subprocess.run(['docker', 'cp', f'backup_{self.spinned_up_db_name}.dump', f'{self.container_name}:backup_{self.spinned_up_db_name}.dump'])
-        print('restoring dump')
-        # Restore data in Docker container
-        subprocess.run(['docker', 'exec', '-it', self.container_name, 'bash', '-c', f'pg_restore -U $POSTGRES_USER -d $POSTGRES_DB /backup_{self.spinned_up_db_name}.dump'], env={'POSTGRES_USER': spinned_up_db_username, 'POSTGRES_DB': self.spinned_up_db_name})
-
         # PostgreSQL connection string format
         self.db_config = {
-            'db_username': spinned_up_db_username,
-            'db_password': spinned_up_db_password,
-            'db_host': spinned_up_db_host,
-            'db_port': spinned_up_port_number,
-            'db_name': self.spinned_up_db_name
+            'db_username': db_username,
+            'db_password': db_password,
+            'db_host': db_host,
+            'db_port': db_port,
+            'db_name': db_name
         }
-        self.connection_string = f'postgresql://{spinned_up_db_username}:{spinned_up_db_password}@{spinned_up_db_host}:{spinned_up_port_number}/{self.spinned_up_db_name}'
-
+        self.connection_string = f'postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}'
         self.engine = create_engine(self.connection_string)
-        print(f'connecting to spinned up db: {self.spinned_up_db_name}')
-
         self.db = SQLDatabase.from_uri(self.connection_string)
-        print('connected')
+
         api_key = self.config.get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY')
         if api_key is None:
             api_key = prompt("Enter your Open AI API key: ", is_password=True)
@@ -140,6 +121,7 @@ class PSqlomni:
         GPT_MODEL = self.config.get('model') or os.environ.get('model')
         self.llm = ChatOpenAI(model=GPT_MODEL,openai_api_key=api_key)
 
+
     def parse_args(self):
         parser = argparse.ArgumentParser(add_help=False)
         parser.add_argument('-help', '--help', action='help', default=argparse.SUPPRESS, help='Show this help message and exit')
@@ -150,6 +132,7 @@ class PSqlomni:
         parser.add_argument('--password', type=str, required=False)
         return parser.parse_args()
     
+
     def save_config(self, key=None, value=None):
         if key and value:
             self.config[key] = value
@@ -160,6 +143,7 @@ class PSqlomni:
 
         with open(self.CONFIG_FILE, 'w') as f:
             f.write(json.dumps(self.config))
+
 
     def load_config(self):
         self.config = {}
@@ -174,6 +158,7 @@ class PSqlomni:
             except:
                 pass
 
+
     def get_version(self):
         try:
             pyproject = toml.load(os.path.join(os.path.dirname(__file__), "..", "pyproject.toml"))
@@ -181,7 +166,26 @@ class PSqlomni:
         except:
             return importlib.metadata.version("psqlomni")
 
+
     def chat_loop(self):
+        """
+        Start a chat interface loop for interacting with a database.
+
+        This method initiates an interactive command-line session where users can input commands
+        to interact with the PostgreSQL database. The available commands include displaying help
+        information, showing database connection details, and querying the database. The method
+        continuously prompts the user for input until the user exits the session.
+
+        Upon receiving a command, the method processes it and provides the appropriate response.
+        The Halo spinner is used to indicate that a command is being processed.
+
+        Exceptions:
+            - KeyboardInterrupt: Stops the spinner and exits the loop on a keyboard interrupt.
+            - EOFError: Stops the spinner and exits the loop on an end-of-file (EOF) error.
+
+        Returns:
+            None
+        """
         session = PromptSession()
 
         spinner = Halo(text='thinking', spinner='dots')
@@ -202,8 +206,6 @@ You can ask questions like:
                 elif cmd == "help":
                     print("""
 connection - show the database connection info
-history - show the complete message history
-new thread - start a new thread
 exit
                           """)
                     continue
@@ -212,69 +214,287 @@ exit
                     print(f"Version: {self.get_version()}")
                     continue
                 elif cmd == "exit":
-                    self.remove_container_and_data(self.container_name,self.spinned_up_db_name)
                     return
 
+                spinner.start("thinking...")
+                self.process_command(cmd)
+                spinner.stop()
+            except (KeyboardInterrupt, EOFError):
+                spinner.stop()
+                return
+            
+
+    def on_sys_exit_chat_loop(self):
+        """
+        This method is very similar to chat_loop method.
+        It is called when sys.exit() is called for 
+        all confirms_whether_to_execute_ tools.
+        """
+        session = PromptSession()
+        spinner = Halo(text='thinking', spinner='dots')
+        self.spinner = spinner
+
+        while True:
+            try:
+                cmd = session.prompt("\n> ")
+                if cmd == "":
+                    continue
+                elif cmd == "help":
+                    print("""
+connection - show the database connection info
+exit
+                          """)
+                    continue
+                elif cmd == "connection":
+                    print(f"Host: {self.db_config['db_host']}, Database: {self.db_config['db_name']}, User: {self.db_config['db_username']}")
+                    print(f"Version: {self.get_version()}")
+                    continue
+                elif cmd == "exit":
+                    return
                 cmd = cmd
                 spinner.start("thinking...")
                 self.process_command(cmd)
                 spinner.stop()
             except (KeyboardInterrupt, EOFError):
                 spinner.stop()
-                self.remove_container_and_data(self.container_name,self.spinned_up_db_name)
                 return
     
 
-    def remove_container_and_data(self, container_name, db_name):
-        # Check if the container is running
-        result = subprocess.run(['docker', 'ps', '--filter', f'name={container_name}', '--format', '{{.Names}}'], capture_output=True, text=True)
-        
-        if container_name in result.stdout.splitlines():
-            # Container is running, stop it first
-            subprocess.run(['docker', 'stop', container_name])
-            print(f"Container {container_name} stopped.")
-            
-            # Remove the container
-            subprocess.run(['docker', 'rm', container_name])
-            print(f"Container {container_name} removed.")
-        else:
-            # Check if the container exists but is not running
-            result = subprocess.run(['docker', 'ps', '-a', '--filter', f'name={container_name}', '--format', '{{.Names}}'], capture_output=True, text=True)
-            
-            if container_name in result.stdout.splitlines():
-                # Container exists but is not running, remove it
-                subprocess.run(['docker', 'rm', container_name])
-                print(f"Container {container_name} removed.")
-            else:
-                print(f"Container {container_name} does not exist.")
-
-        # Delete the dumped data file if it exists
-        if os.path.exists(f'backup_{db_name}.dump'):
-            os.remove(f'backup_{db_name}.dump')
-            print("Dumped data file deleted.")
-        else:
-            print("Dumped data file not found.")
-    
-    def is_postgres_image_pulled(self):
-        # Run the command to list Docker images
-        result = subprocess.run(['docker', 'images', '--format', '{{.Repository}}'], capture_output=True, text=True)
-        
-        # Check if 'postgres' is in the output
-        return 'postgres' in result.stdout.splitlines()
-
-    
     def process_command(self, cmd: str):
-        # agent_executor = create_sql_agent(self.llm, db=self.db, agent_type="openai-tools", verbose=True)
-        agent_executor = create_sql_agent(self.llm, db=self.db, agent_type="openai-tools")
-        result = agent_executor.invoke(
-            {
-                "input": cmd
-            }
-        )
-        # print('result',result)
-        if result and 'output' in result and result['output'] is not None:
-            print(result['output'])
+        @tool
+        def confirms_whether_to_execute_a_query(query) -> list:
+            """
+            Confirms whether to execute a query.
+            Input should be a query.
+            :param query: This is the input string.
+            """
+            # print('here is the query',query)
+            self.spinner.stop()
+            print('Confirming whether to execute the following query: ',query)
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                try:
+                    print('exiting agent')
+                    sys.exit()
+                finally:
+                    print('agent exited')
+                    self.on_sys_exit_chat_loop()
+            self.spinner.start('thinking...')
 
+        
+        @tool
+        def confirms_whether_to_execute_a_delete_statement(query) -> list:
+            """
+            Confirms whether to execute a delete query.
+            Input should be a query.
+            :param query: This is the input string.
+            """
+            self.spinner.stop()
+            print('Confirming whether to execute the following query: ',query)
+            # print('here is the query',query)
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                try:
+                    print('exiting agent')
+                    sys.exit()
+                finally:
+                    self.on_sys_exit_chat_loop()
+            self.spinner.start('thinking...')
+
+        
+        @tool
+        def confirms_whether_to_execute_an_update_statement(query) -> list:
+            """
+            Confirms whether to execute an update statement.
+            Input should be a query.
+            :param query: This is the input string.
+            """
+            self.spinner.stop()
+            print('Confirming whether to execute the following query: ',query)
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                try:
+                    print('exiting agent')
+                    sys.exit()
+                finally:
+                    print('agent exited')
+                    self.on_sys_exit_chat_loop()
+            self.spinner.start("thinking...")
+
+        @tool
+        def confirms_whether_to_execute_a_drop_statement(query) -> list:
+            """
+            Confirms whether to execute a drop statement.
+            Input should be a query.
+            :param query: This is the input string.
+            """
+            # print('here is the query',query)
+            self.spinner.stop()
+            print('Confirming whether to execute the following query: ',query)
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                try:
+                    print('exiting agent')
+                    sys.exit()
+                finally:
+                    print('agent exited')
+                    self.on_sys_exit_chat_loop()
+            self.spinner.start('thinking...')
+
+        
+        @tool
+        def confirms_whether_to_execute_an_insert_statement(query) -> list:
+            """
+            Confirms whether to execute an insert statement.
+            Input should be a query.
+            :param query: This is the input string.
+            """
+            # print('here is the query',query)
+            self.spinner.stop()
+            print('Confirming whether to execute the following query: ',query)
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                try:
+                    print('exiting agent')
+                    sys.exit()
+                finally:
+                    print('agent exited')
+                    self.on_sys_exit_chat_loop()
+            self.spinner.start('thinking...')
+
+
+        @tool
+        def confirms_whether_to_execute_a_statement(query) -> list:
+            """
+            Confirms whether to execute a statement.
+            Input should be a query.
+            :param query: This is the input string.
+            """
+            # print('here is the query',query)
+            self.spinner.stop()
+            print('Confirming whether to execute the following query: ',query)
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                try:
+                    print('exiting agent')
+                    sys.exit()
+                finally:
+                    print('agent exited')
+                    self.on_sys_exit_chat_loop()
+            self.spinner.start('thinking...')
+
+        @tool
+        def confirms_whether_to_execute_any_statement(query) -> list:
+            """
+            Confirms whether to execute any statement.
+            Input should be a query.
+            :param query: This is the input string.
+            """
+            # print('here is the query',query)
+            self.spinner.stop()
+            print('Confirming whether to execute the following query: ',query)
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                try:
+                    print('exiting agent')
+                    sys.exit()
+                finally:
+                    print('agent exited')
+                    self.on_sys_exit_chat_loop()
+            self.spinner.start('thinking...')
+        
+
+        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
+        context = toolkit.get_context()
+        tools = toolkit.get_tools()
+        MEMORY_KEY = "chat_history"
+
+        messages = [
+            SystemMessage(
+                content=(
+                        """You are an agent designed to interact with a SQL database.
+
+                            confirm whether to execute any statement to the database.
+
+                            confirm whether to execute any update statement to the database.
+
+                            confirm whether to execute any insert statement to the database.
+
+                            confirm whether to execute any delete statement to the database.
+
+                            confirm whether to execute any drop statement to the database.
+
+                            You must ALWAYS confirm whether to execute a query before you execute a query against the database and get back the result.
+
+                            You must ALWAYS double check if your query is correct before you execute a SQL query against the database and get back the result.
+
+                            You must always confirm whether to execute a query before you execute an update query.
+
+                            You must always confirm whether to execute a query before you execute a delete query.
+
+                            You must always confirm whether to execute a query before you execute an insert query.
+
+                            You must always confirm whether to execute a query before you execute a drop query. 
+                            
+                            You must always check the query before you execute it.
+
+                            If you have an update, insert, delete or drop query, you must always check the query before you execute it.
+
+                            If you have an update, insert, delete or drop query, you must always double check if the query is correct before executing.
+
+                            You must always double check if your query is correct before executing.
+
+                            Always invoke query_sql_checker_tool to double check if your query is correct before executing.
+
+                            Always double check your query before you execute it.
+
+                            You must always invoke query_sql_checker_tool to check the query before you invoke query_sql_database_tool.
+
+                            Never make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+
+                            If the question does not seem related to the database, just return "I do not know" as the answer.
+                            """
+                )
+            ),
+            MessagesPlaceholder(variable_name=MEMORY_KEY),
+            HumanMessagePromptTemplate.from_template("{input}"),
+            AIMessage(content=SQL_FUNCTIONS_SUFFIX),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
+        ]
+        prompt = ChatPromptTemplate.from_messages(messages)
+        prompt = prompt.partial(**context)
+        llm = self.llm
+        
+        tools = tools + [confirms_whether_to_execute_a_query, confirms_whether_to_execute_a_delete_statement, confirms_whether_to_execute_an_update_statement, confirms_whether_to_execute_a_drop_statement, confirms_whether_to_execute_an_insert_statement, confirms_whether_to_execute_a_statement, confirms_whether_to_execute_any_statement]
+        llm_with_tools = llm.bind_tools(tools)
+
+        agent = (
+            {
+                "input": lambda x: x["input"],
+                "agent_scratchpad": lambda x: format_to_openai_tool_messages(
+                    x["intermediate_steps"]
+                ),
+                "chat_history": lambda x: x["chat_history"],
+            }
+            | prompt
+            | llm_with_tools
+            | OpenAIToolsAgentOutputParser()
+        )
+        agent_executor = AgentExecutor(agent=agent, tools=tools)
+        result = agent_executor.invoke({"input": cmd, "chat_history": chat_history})
+        if result:
+            self.spinner.stop()
+            print(result["output"])
+            chat_history.extend(
+                [
+                    HumanMessage(content=cmd),
+                    AIMessage(content=result["output"]),
+                ]
+            )
+            self.spinner.start("thinking...")
+        else:
+            print('There are no result..')
+            
 
 def main():
     psqlomni = PSqlomni()
