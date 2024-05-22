@@ -32,7 +32,6 @@ GPT_MODEL4="gpt-4-1106-preview"
 
 chat_history = []
 
-# Replace these with your specific database credentials
 
 class PSqlomni:
     CONFIG_FILE = os.path.expanduser('~/.psqlomni')
@@ -68,7 +67,6 @@ class PSqlomni:
                 db_port = prompt("Enter your database port (5432): ") or 5432
                 db_port = int(db_port)
                 print("Validating connection info...")
-                print(f"host={db_host} dbname={db_name} user={db_username} password={db_password}")
                 try:
                     pgconn = psycopg2.connect(
                         f"host={db_host} dbname={db_name} user={db_username} password={db_password}",
@@ -112,7 +110,7 @@ class PSqlomni:
             print("Which model do you want to use?")
             print(f"1. {GPT_MODEL3}")
             print(f"2. {GPT_MODEL4}")
-            choice = prompt("(1 or 2) >")
+            choice = prompt("(1 or 2) > ")
             if choice == "1":
                 self.save_config("model", GPT_MODEL3)
             else:
