@@ -403,6 +403,14 @@ exit
         toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
         context = toolkit.get_context()
         tools = toolkit.get_tools()
+        try:
+            # Update query_sql_database_tool_description
+            query_sql_tool_name = tools[0].name
+            if query_sql_tool_name == "sql_db_query":
+                tools[0].description = "Always invoke confirms_whether_to_execute_a_query to confirm whether to execute a query before you execute a query. " + tools[0].description
+        except Exception as e:
+            print("An error occurred:", e)
+            
         MEMORY_KEY = "chat_history"
 
         messages = [
@@ -423,28 +431,10 @@ exit
                             You must ALWAYS confirm whether to execute a query before you execute a query against the database and get back the result.
 
                             You must ALWAYS double check if your query is correct before you execute a SQL query against the database and get back the result.
-
-                            You must always confirm whether to execute a query before you execute an update query.
-
-                            You must always confirm whether to execute a query before you execute a delete query.
-
-                            You must always confirm whether to execute a query before you execute an insert query.
-
-                            You must always confirm whether to execute a query before you execute a drop query. 
                             
                             You must always check the query before you execute it.
 
-                            If you have an update, insert, delete or drop query, you must always check the query before you execute it.
-
-                            If you have an update, insert, delete or drop query, you must always double check if the query is correct before executing.
-
-                            You must always double check if your query is correct before executing.
-
                             Always invoke query_sql_checker_tool to double check if your query is correct before executing.
-
-                            Always double check your query before you execute it.
-
-                            You must always invoke query_sql_checker_tool to check the query before you invoke query_sql_database_tool.
 
                             Never make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
