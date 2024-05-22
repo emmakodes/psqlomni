@@ -227,7 +227,7 @@ exit
     def on_sys_exit_chat_loop(self):
         """
         This method is very similar to chat_loop method.
-        It is called when sys.exit() is called for 
+        It is called after sys.exit() is executed for 
         all confirms_whether_to_execute_ tools.
         """
         session = PromptSession()
@@ -262,15 +262,14 @@ exit
 
     def process_command(self, cmd: str):
         @tool
-        def confirms_whether_to_execute_a_query(query) -> list:
+        def confirms_whether_to_execute_a_query(query: str) -> None:
             """
             Confirms whether to execute a query.
             Input should be a query.
             :param query: This is the input string.
             """
-            # print('here is the query',query)
             self.spinner.stop()
-            print('Confirming whether to execute the following query: ',query)
+            print('Confirming whether to execute the following query: ', query)
             _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
             if _continue.lower() != "y":
                 try:
@@ -283,15 +282,14 @@ exit
 
         
         @tool
-        def confirms_whether_to_execute_a_delete_statement(query) -> list:
+        def confirms_whether_to_execute_a_delete_statement(query: str) -> None:
             """
             Confirms whether to execute a delete query.
             Input should be a query.
             :param query: This is the input string.
             """
             self.spinner.stop()
-            print('Confirming whether to execute the following query: ',query)
-            # print('here is the query',query)
+            print('Confirming whether to execute the following query: ', query)
             _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
             if _continue.lower() != "y":
                 try:
@@ -303,14 +301,14 @@ exit
 
         
         @tool
-        def confirms_whether_to_execute_an_update_statement(query) -> list:
+        def confirms_whether_to_execute_an_update_statement(query: str) -> None:
             """
             Confirms whether to execute an update statement.
             Input should be a query.
             :param query: This is the input string.
             """
             self.spinner.stop()
-            print('Confirming whether to execute the following query: ',query)
+            print('Confirming whether to execute the following query: ', query)
             _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
             if _continue.lower() != "y":
                 try:
@@ -322,15 +320,15 @@ exit
             self.spinner.start("thinking...")
 
         @tool
-        def confirms_whether_to_execute_a_drop_statement(query) -> list:
+        def confirms_whether_to_execute_a_drop_statement(query: str) -> None:
             """
             Confirms whether to execute a drop statement.
             Input should be a query.
             :param query: This is the input string.
             """
-            # print('here is the query',query)
+
             self.spinner.stop()
-            print('Confirming whether to execute the following query: ',query)
+            print('Confirming whether to execute the following query: ', query)
             _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
             if _continue.lower() != "y":
                 try:
@@ -343,15 +341,15 @@ exit
 
         
         @tool
-        def confirms_whether_to_execute_an_insert_statement(query) -> list:
+        def confirms_whether_to_execute_an_insert_statement(query: str) -> None:
             """
             Confirms whether to execute an insert statement.
             Input should be a query.
             :param query: This is the input string.
             """
-            # print('here is the query',query)
+
             self.spinner.stop()
-            print('Confirming whether to execute the following query: ',query)
+            print('Confirming whether to execute the following query: ', query)
             _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
             if _continue.lower() != "y":
                 try:
@@ -364,15 +362,15 @@ exit
 
 
         @tool
-        def confirms_whether_to_execute_a_statement(query) -> list:
+        def confirms_whether_to_execute_a_statement(query: str) -> None:
             """
             Confirms whether to execute a statement.
             Input should be a query.
             :param query: This is the input string.
             """
-            # print('here is the query',query)
+
             self.spinner.stop()
-            print('Confirming whether to execute the following query: ',query)
+            print('Confirming whether to execute the following query: ', query)
             _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
             if _continue.lower() != "y":
                 try:
@@ -384,15 +382,15 @@ exit
             self.spinner.start('thinking...')
 
         @tool
-        def confirms_whether_to_execute_any_statement(query) -> list:
+        def confirms_whether_to_execute_any_statement(query: str) -> None:
             """
             Confirms whether to execute any statement.
             Input should be a query.
             :param query: This is the input string.
             """
-            # print('here is the query',query)
+
             self.spinner.stop()
-            print('Confirming whether to execute the following query: ',query)
+            print('Confirming whether to execute the following query: ', query)
             _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
             if _continue.lower() != "y":
                 try:
@@ -463,10 +461,9 @@ exit
         ]
         prompt = ChatPromptTemplate.from_messages(messages)
         prompt = prompt.partial(**context)
-        llm = self.llm
         
         tools = tools + [confirms_whether_to_execute_a_query, confirms_whether_to_execute_a_delete_statement, confirms_whether_to_execute_an_update_statement, confirms_whether_to_execute_a_drop_statement, confirms_whether_to_execute_an_insert_statement, confirms_whether_to_execute_a_statement, confirms_whether_to_execute_any_statement]
-        llm_with_tools = llm.bind_tools(tools)
+        llm_with_tools = self.llm.bind_tools(tools)
 
         agent = (
             {
@@ -491,7 +488,6 @@ exit
                     AIMessage(content=result["output"]),
                 ]
             )
-            self.spinner.start("thinking...")
         else:
             print('There are no result..')
             
