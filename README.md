@@ -1,9 +1,69 @@
-Project In progress.....
+# psqlomni  
+(psql powered with natural language)
 
-- You can clone the project
-- cd to the project
-- execute `python -m psqlomni`
-- enter database and openai env vars
+An LLM-powered chat interface to your database. This tool understands Postgres syntax and can easily translate English queries into proper SQL queries. Uses Langchain and [Open AI](https://openai.com) model.
 
-https://github.com/emmakodes/psqlomni/assets/34986076/e9ef52f0-3f74-4d72-aa14-a6dd24f824ce
+This provides the quickest way to enable LLM chat with your data - no preparation is needed.
+
+
+Here's a quick demo showing natural language queries:
+
+
+## Installation
+
+You will need:
+
+1. credentials for your database
+2. an OpenAI [API Key](https://platform.openai.com/account/api-keys) from your OpenAI account.
+
+then
+
+```
+pip install psqlomni
+```
+
+or download the source. 
+
+Run the CLI with:
+
+    psqlomni
+
+or use `python -m psqlomni` to run from source.
+
+## What can it do?
+
+The Open AI model understands most Postgres syntax, so it can generate both generic SQL commands as well as very Postgres-specific ones like querying system settings.
+
+The LLM is also good at analyzing tables, understanding what they are likely used for, and inferring relationships between tables. It is good at writing JOINs between tables without explicit instruction.
+
+It can write queries to group and summarize results.
+
+It also maintains a history of the chat, so you can easily ask follow up questions.
+
+### Configuration
+
+You can configure the database connection either using `psql` style command line arguments
+or the env vars `DBHOST`, `DBNAME`, `DBUSER`, `DBPASSWORD`, `DBPORT`.
+
+Else when you first run the program it will prompt you for the connection credentials as
+well as your OpenAI API key.
+
+After first setup all the configuration information is stored in `~/.psqlomni`. Delete that
+file if you want to start over.
+
+## How it works
+
+`psqlomni` uses Langchain and the OpenAI model to create an agent to work with your database.
+
+When requested the LLM automatically generates the right SQL, ask if to execute the query, if yes(or y), it executes the query. The query results are then returned. If an error is returned, it rewrites the query, check the query, ask for confirmation to execute query and then try again.
+
+### Command Reference
+
+There are a few system commands supported for meta operations: 
+
+`help` - show system commands
+
+`connection` - show the current db connection details, and the active LLM model
+
+`exit` or ctrl-c to exit
 
