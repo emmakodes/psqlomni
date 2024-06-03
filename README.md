@@ -8,6 +8,7 @@ This provides the quickest way to enable LLM chat with your data - no preparatio
 
 Here's a quick demo showing natural language queries:
 
+https://github.com/emmakodes/psqlomni/assets/34986076/0c58f4fd-c359-47c2-8e3c-4b068545e522
 
 ## Installation
 
