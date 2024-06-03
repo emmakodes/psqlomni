@@ -3,7 +3,6 @@ from datetime import datetime
 import importlib.metadata
 import json
 import os
-import sys
 import psycopg2
 import toml
 from prompt_toolkit import PromptSession, prompt
@@ -23,14 +22,62 @@ from langchain_core.prompts.chat import (
 from langchain.agents import tool
 from langchain.agents.format_scratchpad.openai_tools import format_to_openai_tool_messages
 from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
 
-
+from typing import Any, Dict, Optional, Sequence, Type, Union
+from sqlalchemy.engine import Result
+from langchain_core.callbacks import (
+    CallbackManagerForToolRun,
+)
+from langchain_community.utilities.sql_database import SQLDatabase
+from langchain_core.tools import BaseTool
 
 GPT_MODEL3="gpt-3.5-turbo-0125" # "gpt-3.5-turbo-1106"
 GPT_MODEL4="gpt-4-1106-preview"
 
 
 chat_history = []
+
+spinner = Halo(text='thinking', spinner='dots')
+
+
+class BaseSQLDatabaseTool(BaseModel):
+    """Base tool for interacting with a SQL database."""
+    
+    db: SQLDatabase = Field(exclude=True)
+
+    class Config(BaseTool.Config):
+        pass
+
+
+class _QuerySQLDataBaseToolInput(BaseModel):
+    query: str = Field(..., description="A detailed and correct SQL query.")
+
+
+class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
+    """Tool for querying a SQL database."""
+
+    name: str = "sql_db_query"
+    description: str = """
+    Execute a SQL query against the database and get back the result..
+    If the query is not correct, an error message will be returned.
+    If an error is returned, rewrite the query, check the query, and try again.
+    """
+    args_schema: Type[BaseModel] = _QuerySQLDataBaseToolInput
+
+    def _run(
+        self,
+        query: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> Union[str, Sequence[Dict[str, Any]], Result]:
+        """Execute the query, return the results or an error message."""
+        spinner.stop()
+        _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+        spinner.start("thinking...")
+        if _continue.lower() == "y":
+            return self.db.run_no_throw(query)
+        
+        return 'Response: Query not Executed'
 
 
 class PSqlomni:
@@ -186,9 +233,6 @@ class PSqlomni:
         """
         session = PromptSession()
 
-        spinner = Halo(text='thinking', spinner='dots')
-        self.spinner = spinner
-
         print("""
 Welcome to PSQLOMNI, the chat interface to your Postgres database.
 You can ask questions like:
@@ -220,221 +264,33 @@ exit
             except (KeyboardInterrupt, EOFError):
                 spinner.stop()
                 return
-            
-
-    def on_sys_exit_chat_loop(self):
-        """
-        This method is very similar to chat_loop method.
-        It is called after sys.exit() is executed for 
-        all confirms_whether_to_execute_ tools.
-        """
-        session = PromptSession()
-        spinner = Halo(text='thinking', spinner='dots')
-        self.spinner = spinner
-
-        while True:
-            try:
-                cmd = session.prompt("\n> ")
-                if cmd == "":
-                    continue
-                elif cmd == "help":
-                    print("""
-connection - show the database connection info
-exit
-                          """)
-                    continue
-                elif cmd == "connection":
-                    print(f"Host: {self.db_config['db_host']}, Database: {self.db_config['db_name']}, User: {self.db_config['db_username']}")
-                    print(f"Version: {self.get_version()}")
-                    continue
-                elif cmd == "exit":
-                    return
-                cmd = cmd
-                spinner.start("thinking...")
-                self.process_command(cmd)
-                spinner.stop()
-            except (KeyboardInterrupt, EOFError):
-                spinner.stop()
-                return
     
 
     def process_command(self, cmd: str):
-        @tool
-        def confirms_whether_to_execute_a_query(query: str) -> None:
-            """
-            Confirms whether to execute a query.
-            Input should be a query.
-            :param query: This is the input string.
-            """
-            self.spinner.stop()
-            print('Confirming whether to execute the following query: ', query)
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                try:
-                    print('exiting agent')
-                    sys.exit()
-                finally:
-                    print('agent exited')
-                    self.on_sys_exit_chat_loop()
-            self.spinner.start('thinking...')
 
-        
-        @tool
-        def confirms_whether_to_execute_a_delete_statement(query: str) -> None:
-            """
-            Confirms whether to execute a delete query.
-            Input should be a query.
-            :param query: This is the input string.
-            """
-            self.spinner.stop()
-            print('Confirming whether to execute the following query: ', query)
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                try:
-                    print('exiting agent')
-                    sys.exit()
-                finally:
-                    self.on_sys_exit_chat_loop()
-            self.spinner.start('thinking...')
-
-        
-        @tool
-        def confirms_whether_to_execute_an_update_statement(query: str) -> None:
-            """
-            Confirms whether to execute an update statement.
-            Input should be a query.
-            :param query: This is the input string.
-            """
-            self.spinner.stop()
-            print('Confirming whether to execute the following query: ', query)
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                try:
-                    print('exiting agent')
-                    sys.exit()
-                finally:
-                    print('agent exited')
-                    self.on_sys_exit_chat_loop()
-            self.spinner.start("thinking...")
-
-        @tool
-        def confirms_whether_to_execute_a_drop_statement(query: str) -> None:
-            """
-            Confirms whether to execute a drop statement.
-            Input should be a query.
-            :param query: This is the input string.
-            """
-
-            self.spinner.stop()
-            print('Confirming whether to execute the following query: ', query)
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                try:
-                    print('exiting agent')
-                    sys.exit()
-                finally:
-                    print('agent exited')
-                    self.on_sys_exit_chat_loop()
-            self.spinner.start('thinking...')
-
-        
-        @tool
-        def confirms_whether_to_execute_an_insert_statement(query: str) -> None:
-            """
-            Confirms whether to execute an insert statement.
-            Input should be a query.
-            :param query: This is the input string.
-            """
-
-            self.spinner.stop()
-            print('Confirming whether to execute the following query: ', query)
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                try:
-                    print('exiting agent')
-                    sys.exit()
-                finally:
-                    print('agent exited')
-                    self.on_sys_exit_chat_loop()
-            self.spinner.start('thinking...')
-
-
-        @tool
-        def confirms_whether_to_execute_a_statement(query: str) -> None:
-            """
-            Confirms whether to execute a statement.
-            Input should be a query.
-            :param query: This is the input string.
-            """
-
-            self.spinner.stop()
-            print('Confirming whether to execute the following query: ', query)
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                try:
-                    print('exiting agent')
-                    sys.exit()
-                finally:
-                    print('agent exited')
-                    self.on_sys_exit_chat_loop()
-            self.spinner.start('thinking...')
-
-        @tool
-        def confirms_whether_to_execute_any_statement(query: str) -> None:
-            """
-            Confirms whether to execute any statement.
-            Input should be a query.
-            :param query: This is the input string.
-            """
-
-            self.spinner.stop()
-            print('Confirming whether to execute the following query: ', query)
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                try:
-                    print('exiting agent')
-                    sys.exit()
-                finally:
-                    print('agent exited')
-                    self.on_sys_exit_chat_loop()
-            self.spinner.start('thinking...')
-        
+        custom_sql_query_tool = QuerySQLDataBaseTool(
+                                description="Input to this tool is a detailed and correct SQL query, output is a result from the database. If the query is not correct, an error message will be returned. If an error is returned, rewrite the query, check the query, and try again. If you encounter an issue with Unknown column 'xxxx' in 'field list', use sql_db_schema to query the correct table fields.",
+                                args_schema=_QuerySQLDataBaseToolInput,
+                                db=self.db
+                            )
 
         toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
         context = toolkit.get_context()
         tools = toolkit.get_tools()
+
         try:
-            # Update query_sql_database_tool_description
             query_sql_tool_name = tools[0].name
             if query_sql_tool_name == "sql_db_query":
-                tools[0].description = "Always invoke confirms_whether_to_execute_a_query to confirm whether to execute a query before you execute a query. " + tools[0].description
+                tools[0] = custom_sql_query_tool
         except Exception as e:
             print("An error occurred:", e)
-            
+
         MEMORY_KEY = "chat_history"
 
         messages = [
             SystemMessage(
                 content=(
                         """You are an agent designed to interact with a SQL database.
-
-                            confirm whether to execute any statement to the database.
-
-                            confirm whether to execute any update statement to the database.
-
-                            confirm whether to execute any insert statement to the database.
-
-                            confirm whether to execute any delete statement to the database.
-
-                            confirm whether to execute any drop statement to the database.
-
-                            You must ALWAYS confirm whether to execute a query before you execute a query against the database and get back the result.
-
-                            You must ALWAYS double check if your query is correct before you execute a SQL query against the database and get back the result.
-                            
-                            You must always check the query before you execute it.
-
-                            Always invoke query_sql_checker_tool to double check if your query is correct before executing.
 
                             Never make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
@@ -449,8 +305,6 @@ exit
         ]
         prompt = ChatPromptTemplate.from_messages(messages)
         prompt = prompt.partial(**context)
-        
-        tools = tools + [confirms_whether_to_execute_a_query, confirms_whether_to_execute_a_delete_statement, confirms_whether_to_execute_an_update_statement, confirms_whether_to_execute_a_drop_statement, confirms_whether_to_execute_an_insert_statement, confirms_whether_to_execute_a_statement, confirms_whether_to_execute_any_statement]
         llm_with_tools = self.llm.bind_tools(tools)
 
         agent = (
@@ -468,8 +322,8 @@ exit
         agent_executor = AgentExecutor(agent=agent, tools=tools)
         result = agent_executor.invoke({"input": cmd, "chat_history": chat_history})
         if result:
-            self.spinner.stop()
-            print(result["output"])
+            spinner.stop()
+            print(f"[Assistant] --> {result['output']}")
             chat_history.extend(
                 [
                     HumanMessage(content=cmd),
