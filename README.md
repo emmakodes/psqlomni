@@ -56,6 +56,8 @@ well as your OpenAI API key.
 After first setup all the configuration information is stored in `~/.psqlomni`. Delete that
 file if you want to start over.
 
+You can specify the number of sample rows that will be appended to each table description. This can increase performance as demonstrated in the paper Rajkumar et al, 2022 (https://arxiv.org/abs/2204.00498). Follows best practices as specified in: Rajkumar et al, 2022 (https://arxiv.org/abs/2204.00498)
+
 ## How it works
 
 `psqlomni` uses Langchain and the OpenAI model to create an agent to work with your database.
