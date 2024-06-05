@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "psqlomni"
-version = "0.1.0"
+version = "0.1.1"
 description = "LLM-powered chat interface to your Postgres database - (psql powered with Natural Language)"
 authors = ["emmakodes <emmamichael65@gmail.com>"]
 readme = "README.md"
