@@ -33,11 +33,15 @@ or use `python -m psqlomni` to run from source.
 
 ## What can it do?
 
-The Open AI model understands most Postgres syntax, so it can generate both generic SQL commands as well as very Postgres-specific ones like querying system settings.
+The Open AI model understands most Postgres syntax, so it can generate both generic SQL commands as well as very Postgres-specific ones like querying system settings. It can answer questions based on the databases' schema as well as on the databases' content (like describing a specific table).
 
 The LLM is also good at analyzing tables, understanding what they are likely used for, and inferring relationships between tables. It is good at writing JOINs between tables without explicit instruction.
 
 It can write queries to group and summarize results.
+
+It can recover from errors by running a generated query, catching the traceback and regenerating it correctly.
+
+It will save tokens by only retrieving the schema from relevant tables.
 
 It also maintains a history of the chat, so you can easily ask follow up questions.
 
