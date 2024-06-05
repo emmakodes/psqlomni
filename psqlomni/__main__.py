@@ -13,7 +13,7 @@ from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_openai import ChatOpenAI
 from langchain.agents.agent import AgentExecutor
 from langchain_community.agent_toolkits.sql.prompt import SQL_FUNCTIONS_SUFFIX
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.prompts.chat import (
     ChatPromptTemplate,
     HumanMessagePromptTemplate,
@@ -31,12 +31,13 @@ from langchain_core.callbacks import (
 )
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_core.tools import BaseTool
+from langchain.memory import ConversationBufferWindowMemory
 
 GPT_MODEL3="gpt-3.5-turbo-0125" # "gpt-3.5-turbo-1106"
 GPT_MODEL4="gpt-4-1106-preview"
 
-
-chat_history = []
+MEMORY_KEY = "chat_history"
+memory = ConversationBufferWindowMemory(k=3, memory_key=MEMORY_KEY, return_messages=True)
 
 spinner = Halo(text='thinking', spinner='dots')
 
@@ -77,7 +78,7 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
         if _continue.lower() == "y":
             return self.db.run_no_throw(query)
         
-        return 'Response: Query not Executed'
+        return "Response: Query not Executed as it should not be executed. Don't try executing the query again as it is not allowed by the user. Execution stopped by the user as the user does not want to proceed with executing the query."
 
 
 class PSqlomni:
@@ -122,6 +123,7 @@ class PSqlomni:
                     with pgconn.cursor() as cursor:
                         cursor.execute("SELECT version();")
                     connection_good = True
+                    print("Validation done.")
                 except psycopg2.OperationalError as e:
                     print("Error: ", e)
                     continue
@@ -133,6 +135,7 @@ class PSqlomni:
                     "DBPORT": db_port,
                     "DBNAME": db_name
                 }
+                
 
             self.save_config()
 
@@ -146,7 +149,14 @@ class PSqlomni:
         }
         self.connection_string = f'postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}'
         self.engine = create_engine(self.connection_string)
-        self.db = SQLDatabase.from_uri(self.connection_string)
+
+        sample_rows_in_table_info = self.config.get('sample_rows_in_table_info') or os.environ.get('sample_rows_in_table_info')
+        if sample_rows_in_table_info is None:
+            sample_rows_in_table_info = prompt("Number of sample rows to be passed to model (Default is 3): ",) or 3
+            self.save_config("sample_rows_in_table_info", sample_rows_in_table_info)
+
+        sample_rows_in_table_info = int(sample_rows_in_table_info)
+        self.db = SQLDatabase.from_uri(self.connection_string,sample_rows_in_table_info=sample_rows_in_table_info)
 
         api_key = self.config.get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY')
         if api_key is None:
@@ -285,14 +295,10 @@ exit
         except Exception as e:
             print("An error occurred:", e)
 
-        MEMORY_KEY = "chat_history"
-
         messages = [
             SystemMessage(
                 content=(
                         """You are an agent designed to interact with a SQL database.
-
-                            Never make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
                             If the question does not seem related to the database, just return "I do not know" as the answer.
                             """
@@ -313,25 +319,24 @@ exit
                 "agent_scratchpad": lambda x: format_to_openai_tool_messages(
                     x["intermediate_steps"]
                 ),
-                "chat_history": lambda x: x["chat_history"],
+                MEMORY_KEY: lambda x: memory.load_memory_variables(x).get(MEMORY_KEY, []),
             }
             | prompt
             | llm_with_tools
             | OpenAIToolsAgentOutputParser()
         )
-        agent_executor = AgentExecutor(agent=agent, tools=tools)
-        result = agent_executor.invoke({"input": cmd, "chat_history": chat_history})
-        if result:
-            spinner.stop()
-            print(f"[Assistant] --> {result['output']}")
-            chat_history.extend(
-                [
-                    HumanMessage(content=cmd),
-                    AIMessage(content=result["output"]),
-                ]
-            )
-        else:
-            print('There are no result..')
+        
+        try:
+            agent_executor = AgentExecutor(agent=agent, tools=tools, memory=memory)
+            result = agent_executor.invoke({"input": cmd})
+            if result:
+                spinner.stop()
+                print(f"[Assistant] --> {result['output']}")
+            else:
+                print('There are no result..')
+        except Exception as e:
+            print(f"Error in executing agent: {e}")
+            return None
             
 
 def main():
