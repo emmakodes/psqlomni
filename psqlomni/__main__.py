@@ -22,63 +22,20 @@ from langchain_core.prompts.chat import (
 from langchain.agents import tool
 from langchain.agents.format_scratchpad.openai_tools import format_to_openai_tool_messages
 from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
-from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.pydantic_v1 import Field
 
-from typing import Any, Dict, Optional, Sequence, Type, Union
+from typing import Any, Dict, Sequence, Union
 from sqlalchemy.engine import Result
-from langchain_core.callbacks import (
-    CallbackManagerForToolRun,
-)
 from langchain_community.utilities.sql_database import SQLDatabase
-from langchain_core.tools import BaseTool
 from langchain.memory import ConversationBufferWindowMemory
 
-GPT_MODEL3="gpt-3.5-turbo-0125" # "gpt-3.5-turbo-1106"
+GPT_MODEL3= "gpt-3.5-turbo-1106" # "gpt-3.5-turbo-0125"
 GPT_MODEL4="gpt-4-1106-preview"
 
 MEMORY_KEY = "chat_history"
 memory = ConversationBufferWindowMemory(k=3, memory_key=MEMORY_KEY, return_messages=True)
 
 spinner = Halo(text='thinking', spinner='dots')
-
-
-class BaseSQLDatabaseTool(BaseModel):
-    """Base tool for interacting with a SQL database."""
-    
-    db: SQLDatabase = Field(exclude=True)
-
-    class Config(BaseTool.Config):
-        pass
-
-
-class _QuerySQLDataBaseToolInput(BaseModel):
-    query: str = Field(..., description="A detailed and correct SQL query.")
-
-
-class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
-    """Tool for querying a SQL database."""
-
-    name: str = "sql_db_query"
-    description: str = """
-    Execute a SQL query against the database and get back the result..
-    If the query is not correct, an error message will be returned.
-    If an error is returned, rewrite the query, check the query, and try again.
-    """
-    args_schema: Type[BaseModel] = _QuerySQLDataBaseToolInput
-
-    def _run(
-        self,
-        query: str,
-        run_manager: Optional[CallbackManagerForToolRun] = None,
-    ) -> Union[str, Sequence[Dict[str, Any]], Result]:
-        """Execute the query, return the results or an error message."""
-        spinner.stop()
-        _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-        spinner.start("thinking...")
-        if _continue.lower() == "y":
-            return self.db.run_no_throw(query)
-        
-        return "Response: Query not Executed as it should not be executed. Don't try executing the query again as it is not allowed by the user. Execution stopped by the user as the user does not want to proceed with executing the query."
 
 
 class PSqlomni:
@@ -277,21 +234,40 @@ exit
     
 
     def process_command(self, cmd: str):
-
-        custom_sql_query_tool = QuerySQLDataBaseTool(
-                                description="Input to this tool is a detailed and correct SQL query, output is a result from the database. If the query is not correct, an error message will be returned. If an error is returned, rewrite the query, check the query, and try again. If you encounter an issue with Unknown column 'xxxx' in 'field list', use sql_db_schema to query the correct table fields.",
-                                args_schema=_QuerySQLDataBaseToolInput,
-                                db=self.db
-                            )
+        @tool
+        def execute_only_query_that_does_not_modify_the_database(query: str) -> Union[str, Sequence[Dict[str, Any]], Result]:
+            """
+            executes only query that does not modify the database.
+            If the query is not correct, an error message will be returned.
+            If an error is returned, rewrite the query, check the query, and try again.
+            """
+            return self.db.run_no_throw(query)
+        
+        @tool
+        def execute_only_query_that_modify_the_database(query: str) -> Union[str, Sequence[Dict[str, Any]], Result]:
+            """
+            execute only query that modify the database.
+            If the query is not correct, an error message will be returned.
+            If an error is returned, rewrite the query, check the query, and try again.
+            """
+            spinner.stop()
+            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
+            if _continue.lower() != "y":
+                return ("Response: Query not Executed as it should not be executed. "
+                        "Don't try executing the query again as it is not allowed by the user. "
+                        "Execution stopped by the user.")
+            spinner.start('thinking...')
+            return self.db.run_no_throw(query)
+        
 
         toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
         context = toolkit.get_context()
         tools = toolkit.get_tools()
 
         try:
-            query_sql_tool_name = tools[0].name
-            if query_sql_tool_name == "sql_db_query":
-                tools[0] = custom_sql_query_tool
+            tools.pop(0)
+        except IndexError as e:
+            print("IndexError occurred:", e)
         except Exception as e:
             print("An error occurred:", e)
 
@@ -299,6 +275,10 @@ exit
             SystemMessage(
                 content=(
                         """You are an agent designed to interact with a SQL database.
+
+                            check the query, if the query makes any modification to the database call execute_only_query_that_modify_the_database tool.
+
+                            If the query does not make any modification to the database call execute_only_query_that_does_not_modify_the_database tool.
 
                             If the question does not seem related to the database, just return "I do not know" as the answer.
                             """
@@ -311,6 +291,7 @@ exit
         ]
         prompt = ChatPromptTemplate.from_messages(messages)
         prompt = prompt.partial(**context)
+        tools = tools + [execute_only_query_that_does_not_modify_the_database, execute_only_query_that_modify_the_database]
         llm_with_tools = self.llm.bind_tools(tools)
 
         agent = (
