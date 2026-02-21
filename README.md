@@ -1,7 +1,7 @@
 # psqlomni  
 (psql powered with natural language)
 
-An LLM-powered chat interface to your database. This tool understands Postgres syntax and can easily translate English queries into proper SQL queries. Uses Langchain and [Open AI](https://openai.com) model.
+An LLM-powered chat interface to your database. This tool understands Postgres syntax and can translate English prompts into SQL. It now uses LangGraph + LangChain with an OpenAI chat model.
 
 This provides the quickest way to enable LLM chat with your data - no preparation is needed.
 
@@ -60,17 +60,56 @@ You can specify the number of sample rows that will be appended to each table de
 
 ## How it works
 
-`psqlomni` uses Langchain and the OpenAI model to create an agent to work with your database.
+`psqlomni` uses a LangGraph SQL agent flow with explicit tool nodes:
 
-When requested the LLM automatically generates the right SQL, ask if to execute the query, if yes(or y), it executes the query. The query results are then returned. If an error is returned, it rewrites the query, check the query, ask for confirmation to execute query and then try again.
+- table discovery tool node
+- schema tool node
+- query tool node
+
+Every generated SQL query is paused by an interrupt before execution. You can:
+
+- accept and run the query
+- edit the SQL and run the edited query
+- send feedback without execution
+- cancel execution
+
+If an error is returned, the agent can revise the query and request approval again.
 
 ### Command Reference
 
 There are a few system commands supported for meta operations: 
 
-`help` - show system commands
+`/` - open an arrow-key command palette and press enter to run a command
 
-`connection` - show the current db connection details, and the active LLM model
+`/help` - show system commands
 
-`exit` or ctrl-c to exit
+`/connection` - show current db connection, active model, output mode, and thread id
 
+`/disconnect` - disconnect from the current database
+
+`/connect` - connect to a different database (interactive prompts)
+
+`/mode normal|verbose` - switch between compact output and full process tracing
+
+`/model` - show current model
+
+`/model <name>` - set model for current session
+
+`/new` - start a new thread
+
+`/resume <thread_id>` - resume a prior in-memory thread from this session
+
+`/exit` or ctrl-c - exit
+
+Legacy forms (`help`, `connection`, `mode ...`, `exit`) still work.
+
+### Output Stages
+
+In verbose mode, each turn is labeled so the process is easy to follow:
+
+- `[USER]` - your prompt
+- `[AGENT]` - planning state before tool calls
+- `[TOOL CALL]` - tool selected with arguments
+- `[TOOL RESULT:<name>]` - result returned by the tool
+- `[APPROVAL REQUIRED]` - SQL that must be accepted/edited/cancelled before execution
+- `[FINAL]` - final assistant response

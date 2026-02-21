@@ -1,328 +1,377 @@
-import argparse
-from datetime import datetime
-import importlib.metadata
-import json
-import os
+from uuid import uuid4
+
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command
 import psycopg2
-import toml
-from prompt_toolkit import PromptSession, prompt
-from halo import Halo
-from sqlalchemy import create_engine
-from langchain_community.utilities import SQLDatabase
-from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain_openai import ChatOpenAI
-from langchain.agents.agent import AgentExecutor
-from langchain_community.agent_toolkits.sql.prompt import SQL_FUNCTIONS_SUFFIX
-from langchain_core.messages import AIMessage, SystemMessage
-from langchain_core.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    MessagesPlaceholder,
-)
-from langchain.agents import tool
-from langchain.agents.format_scratchpad.openai_tools import format_to_openai_tool_messages
-from langchain.agents.output_parsers.openai_tools import OpenAIToolsAgentOutputParser
-from langchain_core.pydantic_v1 import Field
+from prompt_toolkit.application.current import get_app
+from prompt_toolkit.completion import ConditionalCompleter, WordCompleter
+from prompt_toolkit.filters import Condition
+from prompt_toolkit import PromptSession
+from prompt_toolkit import prompt
+from prompt_toolkit.shortcuts import radiolist_dialog
 
-from typing import Any, Dict, Sequence, Union
-from sqlalchemy.engine import Result
-from langchain_community.utilities.sql_database import SQLDatabase
-from langchain.memory import ConversationBufferWindowMemory
-
-GPT_MODEL3= "gpt-3.5-turbo-1106" # "gpt-3.5-turbo-0125"
-GPT_MODEL4="gpt-4-1106-preview"
-
-MEMORY_KEY = "chat_history"
-memory = ConversationBufferWindowMemory(k=3, memory_key=MEMORY_KEY, return_messages=True)
-
-spinner = Halo(text='thinking', spinner='dots')
+from psqlomni.config import get_version, parse_args, resolve_app_config, save_connection_config
+from psqlomni.db import build_sql_database
+from psqlomni.graph.builder import build_sql_graph
+from psqlomni.llm import build_llm
+from psqlomni.tools.sql_tools import build_sql_tools
+from psqlomni.ui.renderer import ConsoleRenderer
 
 
 class PSqlomni:
-    CONFIG_FILE = os.path.expanduser('~/.psqlomni')
-
     def __init__(self) -> None:
-        self.load_config()
-        self.llm:ChatOpenAI
-        self.db: SQLDatabase = None
+        args = parse_args()
+        self.config = resolve_app_config(args)
+        self.db = build_sql_database(self.config)
+        self.llm = build_llm(self.config)
+        self.tools = build_sql_tools(self.db, self.llm)
+        self.graph = build_sql_graph(self.llm, self.tools)
+        self.thread_id = str(uuid4())
+        self.known_thread_ids = {self.thread_id}
+        self.renderer = ConsoleRenderer(mode="verbose")
+        self.slash_commands = [
+            "/help",
+            "/connection",
+            "/disconnect",
+            "/connect",
+            "/mode",
+            "/model",
+            "/new",
+            "/resume",
+            "/exit",
+        ]
+        self.slash_completer = WordCompleter(self.slash_commands, ignore_case=True)
+        self.command_menu_items = [
+            ("/help", "show commands"),
+            ("/connection", "show current db connection + model + mode + thread"),
+            ("/disconnect", "disconnect current database session"),
+            ("/connect", "connect to a different database"),
+            ("/mode normal", "set compact output"),
+            ("/mode verbose", "set full process output"),
+            ("/model", "show current model"),
+            ("/new", "start a new chat thread"),
+            ("/resume", "resume a prior in-memory thread"),
+            ("/exit", "quit"),
+        ]
 
-        args = self.parse_args()
+    def chat_loop(self) -> None:
+        slash_only_completer = ConditionalCompleter(
+            self.slash_completer,
+            filter=Condition(lambda: get_app().current_buffer.document.text.lstrip().startswith("/")),
+        )
+        session = PromptSession(completer=slash_only_completer, complete_while_typing=True)
 
-        if 'DBUSER' in self.config and 'DBHOST' in self.config:
-            db_username = self.config['DBUSER']
-            db_password = self.config['DBPASSWORD']
-            db_host = self.config['DBHOST']
-            db_port = int(self.config['DBPORT'])
-            db_name = self.config['DBNAME']
-        else:
-            db_username = args.username or os.environ.get('DBUSER')
-            db_password = args.password or os.environ.get('DBPASSWORD')
-            db_host = args.host or os.environ.get('DBHOST')
-            db_port = args.port or 5432
-            db_name = args.dbname or os.environ.get('DBNAME')
+        print(
+            """
+Welcome to PSQLOMNI (LangGraph SQL Agent).
+Commands:
+  /                   Show slash commands
+  /help               Show slash commands
+  /connection         Show current DB connection + model
+  /disconnect         Disconnect current database session
+  /connect            Connect to a different database
+  /mode <value>       Output level: normal|verbose
+  /model [name]       Show or set model for this session
+  /new                Start a new chat thread
+  /resume <thread_id> Resume a previous in-memory thread
+  /exit               Quit
+            """.strip()
+        )
+        print(
+            "Using connection "
+            f"{self.config.db_host}:{self.config.db_port}/{self.config.db_name} as {self.config.db_user} "
+            f"(port={self.config.db_port_mode}, password={self.config.db_password_mode})"
+        )
 
-        if db_host is None:
-            connection_good = False
-            while not connection_good:
-                print("Let's setup your database connection...")
-                db_host = prompt("Enter your database host: ")
-                db_username = prompt("Enter your database username: ")
-                db_password = prompt("Enter your database password: ", is_password=True)
-                db_name = prompt("Enter the database name: ")
-                db_port = prompt("Enter your database port (5432): ") or 5432
-                db_port = int(db_port)
-                print("Validating connection info...")
-                try:
-                    pgconn = psycopg2.connect(
-                        f"host={db_host} dbname={db_name} user={db_username} password={db_password}",
-                        connect_timeout=10
-                    )
-                    with pgconn.cursor() as cursor:
-                        cursor.execute("SELECT version();")
-                    connection_good = True
-                    print("Validation done.")
-                except psycopg2.OperationalError as e:
-                    print("Error: ", e)
-                    continue
-
-                self.config |= {
-                    "DBUSER": db_username,
-                    "DBPASSWORD": db_password,
-                    "DBHOST": db_host,
-                    "DBPORT": db_port,
-                    "DBNAME": db_name
-                }
-                
-
-            self.save_config()
-
-        # PostgreSQL connection string format
-        self.db_config = {
-            'db_username': db_username,
-            'db_password': db_password,
-            'db_host': db_host,
-            'db_port': db_port,
-            'db_name': db_name
-        }
-        self.connection_string = f'postgresql://{db_username}:{db_password}@{db_host}:{db_port}/{db_name}'
-        self.engine = create_engine(self.connection_string)
-
-        sample_rows_in_table_info = self.config.get('sample_rows_in_table_info') or os.environ.get('sample_rows_in_table_info')
-        if sample_rows_in_table_info is None:
-            sample_rows_in_table_info = prompt("Number of sample rows to be passed to model (Default is 3): ",) or 3
-            self.save_config("sample_rows_in_table_info", sample_rows_in_table_info)
-
-        sample_rows_in_table_info = int(sample_rows_in_table_info)
-        self.db = SQLDatabase.from_uri(self.connection_string,sample_rows_in_table_info=sample_rows_in_table_info)
-
-        api_key = self.config.get('OPENAI_API_KEY') or os.environ.get('OPENAI_API_KEY')
-        if api_key is None:
-            api_key = prompt("Enter your Open AI API key: ", is_password=True)
-            self.save_config("OPENAI_API_KEY", api_key)
-
-        if 'model' not in self.config:
-            print("Which model do you want to use?")
-            print(f"1. {GPT_MODEL3}")
-            print(f"2. {GPT_MODEL4}")
-            choice = prompt("(1 or 2) > ")
-            if choice == "1":
-                self.save_config("model", GPT_MODEL3)
-            else:
-                self.save_config("model", GPT_MODEL4)
-
-        GPT_MODEL = self.config.get('model') or os.environ.get('model')
-        self.llm = ChatOpenAI(model=GPT_MODEL,openai_api_key=api_key)
-
-
-    def parse_args(self):
-        parser = argparse.ArgumentParser(add_help=False)
-        parser.add_argument('-help', '--help', action='help', default=argparse.SUPPRESS, help='Show this help message and exit')
-        parser.add_argument('-h', '--host', type=str, required=False)
-        parser.add_argument('-p', '--port', type=int, required=False)
-        parser.add_argument('-U', '--username', type=str, required=False)
-        parser.add_argument('-d', '--dbname', type=str, required=False)
-        parser.add_argument('--password', type=str, required=False)
-        return parser.parse_args()
-    
-
-    def save_config(self, key=None, value=None):
-        if key and value:
-            self.config[key] = value
-
-        for k, v in self.config.items():
-            if isinstance(v, datetime):
-                self.config[k] = v.isoformat()
-
-        with open(self.CONFIG_FILE, 'w') as f:
-            f.write(json.dumps(self.config))
-
-
-    def load_config(self):
-        self.config = {}
-        if os.path.exists(self.CONFIG_FILE):
-            with open(self.CONFIG_FILE, 'r') as f:
-                self.config = json.loads(f.read())
-
-        for k, v in self.config.items():
-            try:
-                dt = datetime.fromisoformat(v)
-                self.config[k] = dt
-            except:
-                pass
-
-
-    def get_version(self):
-        try:
-            pyproject = toml.load(os.path.join(os.path.dirname(__file__), "..", "pyproject.toml"))
-            return pyproject["tool"]["poetry"]["version"]
-        except:
-            return importlib.metadata.version("psqlomni")
-
-
-    def chat_loop(self):
-        """
-        Start a chat interface loop for interacting with a database.
-
-        This method initiates an interactive command-line session where users can input commands
-        to interact with the PostgreSQL database. The available commands include displaying help
-        information, showing database connection details, and querying the database. The method
-        continuously prompts the user for input until the user exits the session.
-
-        Upon receiving a command, the method processes it and provides the appropriate response.
-        The Halo spinner is used to indicate that a command is being processed.
-
-        Exceptions:
-            - KeyboardInterrupt: Stops the spinner and exits the loop on a keyboard interrupt.
-            - EOFError: Stops the spinner and exits the loop on an end-of-file (EOF) error.
-
-        Returns:
-            None
-        """
-        session = PromptSession()
-
-        print("""
-Welcome to PSQLOMNI, the chat interface to your Postgres database.
-You can ask questions like:
-    "help" (show some system commands)
-    "show all the tables"
-    "show me the first 10 rows of the users table"
-        """)
         while True:
             try:
-                cmd = session.prompt("\n> ")
-                if cmd == "":
+                cmd = session.prompt("\n> ").strip()
+                if not cmd:
                     continue
-                elif cmd == "help":
-                    print("""
-connection - show the database connection info
-exit
-                          """)
+                if cmd == "/":
+                    picked = self._pick_slash_command()
+                    if not picked:
+                        continue
+                    cmd = picked
+                if self._handle_slash_or_legacy_command(cmd):
                     continue
-                elif cmd == "connection":
-                    print(f"Host: {self.db_config['db_host']}, Database: {self.db_config['db_name']}, User: {self.db_config['db_username']}")
-                    print(f"Version: {self.get_version()}")
-                    continue
-                elif cmd == "exit":
+                if cmd in {"/exit", "exit"}:
                     return
 
-                spinner.start("thinking...")
                 self.process_command(cmd)
-                spinner.stop()
             except (KeyboardInterrupt, EOFError):
-                spinner.stop()
                 return
-    
 
-    def process_command(self, cmd: str):
-        @tool
-        def execute_only_query_that_does_not_modify_the_database(query: str) -> Union[str, Sequence[Dict[str, Any]], Result]:
+    def _show_slash_help(self) -> None:
+        print(
             """
-            executes only query that does not modify the database.
-            If the query is not correct, an error message will be returned.
-            If an error is returned, rewrite the query, check the query, and try again.
-            """
-            return self.db.run_no_throw(query)
-        
-        @tool
-        def execute_only_query_that_modify_the_database(query: str) -> Union[str, Sequence[Dict[str, Any]], Result]:
-            """
-            execute only query that modify the database.
-            If the query is not correct, an error message will be returned.
-            If an error is returned, rewrite the query, check the query, and try again.
-            """
-            spinner.stop()
-            _continue = input(f"Should the agent execute the following query:\n{query}\n(Y/n)?: ") or "Y"
-            if _continue.lower() != "y":
-                return ("Response: Query not Executed as it should not be executed. "
-                        "Don't try executing the query again as it is not allowed by the user. "
-                        "Execution stopped by the user.")
-            spinner.start('thinking...')
-            return self.db.run_no_throw(query)
-        
-
-        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.llm)
-        context = toolkit.get_context()
-        tools = toolkit.get_tools()
-
-        try:
-            tools.pop(0)
-        except IndexError as e:
-            print("IndexError occurred:", e)
-        except Exception as e:
-            print("An error occurred:", e)
-
-        messages = [
-            SystemMessage(
-                content=(
-                        """You are an agent designed to interact with a SQL database.
-
-                            check the query, if the query makes any modification to the database call execute_only_query_that_modify_the_database tool.
-
-                            If the query does not make any modification to the database call execute_only_query_that_does_not_modify_the_database tool.
-
-                            If the question does not seem related to the database, just return "I do not know" as the answer.
-                            """
-                )
-            ),
-            MessagesPlaceholder(variable_name=MEMORY_KEY),
-            HumanMessagePromptTemplate.from_template("{input}"),
-            AIMessage(content=SQL_FUNCTIONS_SUFFIX),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ]
-        prompt = ChatPromptTemplate.from_messages(messages)
-        prompt = prompt.partial(**context)
-        tools = tools + [execute_only_query_that_does_not_modify_the_database, execute_only_query_that_modify_the_database]
-        llm_with_tools = self.llm.bind_tools(tools)
-
-        agent = (
-            {
-                "input": lambda x: x["input"],
-                "agent_scratchpad": lambda x: format_to_openai_tool_messages(
-                    x["intermediate_steps"]
-                ),
-                MEMORY_KEY: lambda x: memory.load_memory_variables(x).get(MEMORY_KEY, []),
-            }
-            | prompt
-            | llm_with_tools
-            | OpenAIToolsAgentOutputParser()
+/
+  /help               show commands
+  /connection         show current db connection + model + mode + thread
+  /disconnect         disconnect current database session
+  /connect            connect to a different database
+  /mode <value>       set output mode: normal|verbose
+  /model [name]       show model, or set model for this session
+  /new                start a new chat thread
+  /resume <thread_id> resume a prior in-memory thread
+  /exit               quit
+            """.strip()
         )
-        
-        try:
-            agent_executor = AgentExecutor(agent=agent, tools=tools, memory=memory)
-            result = agent_executor.invoke({"input": cmd})
-            if result:
-                spinner.stop()
-                print(f"[Assistant] --> {result['output']}")
-            else:
-                print('There are no result..')
-        except Exception as e:
-            print(f"Error in executing agent: {e}")
+
+    def _pick_slash_command(self) -> str | None:
+        values = [(value, f"{value:<14} {desc}") for value, desc in self.command_menu_items]
+        selection = radiolist_dialog(
+            title="PSQLOMNI Commands",
+            text="Use arrow keys, then Enter to select a command.",
+            values=values,
+            ok_text="Select",
+            cancel_text="Cancel",
+        ).run()
+        if not selection:
             return None
-            
+        return selection
+
+    def _handle_slash_or_legacy_command(self, cmd: str) -> bool:
+        if cmd in {"/", "/help", "help"}:
+            self._show_slash_help()
+            return True
+
+        if cmd in {"/connection", "connection"}:
+            connected = self.graph is not None
+            if connected:
+                print(
+                    f"Host: {self.config.db_host}, Database: {self.config.db_name}, User: {self.config.db_user}"
+                )
+                print(
+                    f"Port: {self.config.db_port_mode} [{self.config.db_port_source}]"
+                )
+                print(
+                    f"Password: {self.config.db_password_mode} [{self.config.db_password_source}]"
+                )
+            else:
+                print("Database: DISCONNECTED")
+            print(f"Model: {self.config.model}")
+            print(f"Version: {get_version()}")
+            print(f"Output mode: {self.renderer.mode}")
+            print(f"Thread: {self.thread_id}")
+            return True
+
+        if cmd in {"/disconnect", "disconnect"}:
+            self._disconnect_database()
+            return True
+
+        if cmd in {"/connect", "connect"}:
+            self._connect_database_interactive()
+            return True
+
+        if cmd.startswith("/mode ") or cmd.startswith("mode "):
+            mode = cmd.split(" ", 1)[1].strip().lower()
+            if mode not in {"normal", "verbose"}:
+                print("Invalid mode. Use: /mode normal|verbose")
+                return True
+            self.renderer.set_mode(mode)
+            print(f"Output mode set to: {mode}")
+            return True
+
+        if cmd in {"/model", "model"}:
+            print(f"Current model: {self.config.model}")
+            print("Usage: /model <model_name>")
+            return True
+
+        if cmd.startswith("/model "):
+            model = cmd.split(" ", 1)[1].strip()
+            if not model:
+                print("Model cannot be empty. Usage: /model <model_name>")
+                return True
+            self.config.model = model
+            self.llm = build_llm(self.config)
+            self.tools = build_sql_tools(self.db, self.llm)
+            self.graph = build_sql_graph(self.llm, self.tools)
+            print(f"Model set for this session: {model}")
+            return True
+
+        if cmd in {"/new", "new"}:
+            self.thread_id = str(uuid4())
+            self.known_thread_ids.add(self.thread_id)
+            print(f"Started new thread: {self.thread_id}")
+            return True
+
+        if cmd.startswith("/resume "):
+            thread_id = cmd.split(" ", 1)[1].strip()
+            if not thread_id:
+                print("Usage: /resume <thread_id>")
+                return True
+            if thread_id not in self.known_thread_ids:
+                print("Unknown thread id for this session.")
+                print("Use /connection to see current thread or /new to start one.")
+                return True
+            self.thread_id = thread_id
+            print(f"Resumed thread: {thread_id}")
+            return True
+
+        if cmd in {"/exit", "exit"}:
+            return False
+
+        return False
+
+    def _disconnect_database(self) -> None:
+        self.db = None
+        self.tools = None
+        self.graph = None
+        self.thread_id = str(uuid4())
+        self.known_thread_ids.add(self.thread_id)
+        print("Disconnected from database.")
+        print("Use /connect to connect to another database.")
+
+    def _connect_database_interactive(self) -> None:
+        current_port = self.config.db_port or 5432
+
+        host = (prompt(f"DB host [{self.config.db_host}]: ") or self.config.db_host).strip()
+        dbname = (prompt(f"DB name [{self.config.db_name}]: ") or self.config.db_name).strip()
+        user = (prompt(f"DB user [{self.config.db_user}]: ") or self.config.db_user).strip()
+        port_raw = (prompt(f"DB port [{current_port}]: ") or str(current_port)).strip()
+        password_input = prompt("DB password (leave blank to reuse current): ", is_password=True)
+        password = password_input
+        password_source = "prompt"
+        if not password:
+            password = self.config.db_password
+            password_source = self.config.db_password_source
+
+        try:
+            port = int(port_raw)
+        except ValueError:
+            print("Invalid port. Connection aborted.")
+            return
+
+        if not host or not dbname or not user:
+            print("Host, database, and user are required. Connection aborted.")
+            return
+
+        try:
+            kwargs = {
+                "host": host,
+                "dbname": dbname,
+                "user": user,
+                "port": port,
+                "connect_timeout": 10,
+            }
+            if password is not None and password != "":
+                kwargs["password"] = password
+            conn = psycopg2.connect(**kwargs)
+            conn.close()
+        except psycopg2.OperationalError as exc:
+            print(f"Connection failed: {exc}")
+            return
+
+        self.config.db_host = host
+        self.config.db_name = dbname
+        self.config.db_user = user
+        self.config.db_port = port
+        self.config.db_password = password
+        self.config.db_host_source = "prompt"
+        self.config.db_name_source = "prompt"
+        self.config.db_user_source = "prompt"
+        self.config.db_port_source = "prompt" if port != 5432 else "default"
+        self.config.db_password_source = password_source
+        self.config.db_port_mode = f"default(5432)" if port == 5432 else f"custom({port})"
+        if password is None:
+            self.config.db_password_mode = "missing"
+        elif password == "":
+            self.config.db_password_mode = "blank"
+        else:
+            self.config.db_password_mode = "set"
+
+        self.db = build_sql_database(self.config)
+        self.tools = build_sql_tools(self.db, self.llm)
+        self.graph = build_sql_graph(self.llm, self.tools)
+        save_connection_config(self.config)
+        self.thread_id = str(uuid4())
+        self.known_thread_ids.add(self.thread_id)
+        print(f"Connected to {host}:{port}/{dbname} as {user}")
+        print(f"Started new thread: {self.thread_id}")
+
+    def process_command(self, cmd: str) -> None:
+        if self.graph is None:
+            print("No active database connection. Use /connect first.")
+            return
+
+        runtime_config = {"configurable": {"thread_id": self.thread_id}}
+        stream_input = {"messages": [("user", cmd)]}
+        seen_messages: set[str] = set()
+        self.renderer.print_user(cmd)
+
+        tool_call_count = 0
+        tool_result_count = 0
+        approval_count = 0
+
+        while True:
+            interrupted = False
+            payload = None
+
+            for step in self.graph.stream(stream_input, config=runtime_config, stream_mode="values"):
+                if "__interrupt__" in step:
+                    interrupted = True
+                    interrupt_obj = step["__interrupt__"][0]
+                    payload = getattr(interrupt_obj, "value", interrupt_obj)
+                    break
+
+                messages = step.get("messages", [])
+                if messages:
+                    message = messages[-1]
+                    if isinstance(message, AIMessage) and message.tool_calls:
+                        tool_call_count += len(message.tool_calls)
+                    if isinstance(message, ToolMessage):
+                        tool_result_count += 1
+                    self.renderer.render_message(message, seen_messages)
+
+            if not interrupted:
+                self.renderer.print_turn_summary(
+                    tool_calls=tool_call_count,
+                    tool_results=tool_result_count,
+                    approvals=approval_count,
+                )
+                return
+
+            approval_count += 1
+            decision = self._prompt_query_decision(payload)
+            stream_input = Command(resume=decision)
+
+    def _prompt_query_decision(self, payload):
+        query = payload.get("query", "") if isinstance(payload, dict) else ""
+        is_mutating = bool(payload.get("is_mutating")) if isinstance(payload, dict) else False
+
+        self.renderer.print_approval_prompt(query=query, is_mutating=is_mutating)
+
+        while True:
+            choice = (prompt("Decision (a/e/f/c): ") or "").strip().lower()
+
+            if choice in {"a", "accept"}:
+                return {"action": "accept"}
+
+            if choice in {"e", "edit"}:
+                edited = prompt("Edited SQL: ").strip()
+                if edited:
+                    return {"action": "edit", "query": edited}
+                print("Edited SQL cannot be empty.")
+                continue
+
+            if choice in {"f", "feedback"}:
+                message = prompt("Feedback to assistant (no execution): ").strip()
+                if message:
+                    return {"action": "feedback", "message": message}
+                print("Feedback cannot be empty.")
+                continue
+
+            if choice in {"c", "cancel", "reject"}:
+                return {"action": "cancel"}
+
+            print("Invalid choice. Use a/e/f/c.")
+
 
 def main():
     psqlomni = PSqlomni()
     psqlomni.chat_loop()
+
 
 if __name__ == "__main__":
     main()
