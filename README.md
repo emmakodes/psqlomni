@@ -1,7 +1,7 @@
 # psqlomni  
 (psql powered with natural language)
 
-An LLM-powered chat interface to your database. This tool understands Postgres syntax and can translate English prompts into SQL. It now uses LangGraph + LangChain with an OpenAI chat model.
+An LLM-powered chat interface to your database. This tool understands Postgres syntax and can translate English prompts into SQL. It uses a LangGraph + LangChain SQL agent and supports OpenAI, Anthropic, Google Gemini, and Ollama.
 
 This provides the quickest way to enable LLM chat with your data - no preparation is needed.
 
@@ -15,12 +15,21 @@ https://github.com/emmakodes/psqlomni/assets/34986076/0c58f4fd-c359-47c2-8e3c-4b
 You will need:
 
 1. credentials for your database
-2. an OpenAI [API Key](https://platform.openai.com/account/api-keys) from your OpenAI account.
+2. credentials for your selected model provider.
 
 then
 
 ```
 pip install psqlomni
+```
+
+Install optional providers only when needed:
+
+```bash
+pip install "psqlomni[anthropic]"
+pip install "psqlomni[google]"
+pip install "psqlomni[ollama]"
+pip install "psqlomni[all-models]"
 ```
 
 or download the source. 
@@ -33,7 +42,7 @@ or use `python -m psqlomni` to run from source.
 
 ## What can it do?
 
-The Open AI model understands most Postgres syntax, so it can generate both generic SQL commands as well as very Postgres-specific ones like querying system settings. It can answer questions based on the databases' schema as well as on the databases' content (like describing a specific table).
+The model understands most Postgres syntax, so it can generate both generic SQL commands as well as very Postgres-specific ones like querying system settings. It can answer questions based on the databases' schema as well as on the databases' content (like describing a specific table).
 
 The LLM is also good at analyzing tables, understanding what they are likely used for, and inferring relationships between tables. It is good at writing JOINs between tables without explicit instruction.
 
@@ -50,8 +59,14 @@ It also maintains a history of the chat, so you can easily ask follow up questio
 You can configure the database connection either using `psql` style command line arguments
 or the env vars `DBHOST`, `DBNAME`, `DBUSER`, `DBPASSWORD`, `DBPORT`.
 
-Else when you first run the program it will prompt you for the connection credentials as
-well as your OpenAI API key.
+Model configuration is controlled with:
+
+- `MODEL_PROVIDER` (`openai|anthropic|google_gemini|ollama`)
+- `MODEL` (provider model id)
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`
+- `OLLAMA_BASE_URL` (for local models, default `http://localhost:11434`)
+
+When you first run the program it prompts for missing DB and provider credentials.
 
 After first setup all the configuration information is stored in `~/.psqlomni`. Delete that
 file if you want to start over.
@@ -83,7 +98,7 @@ There are a few system commands supported for meta operations:
 
 `/help` - show system commands
 
-`/connection` - show current db connection, active model, output mode, and thread id
+`/connection` - show current db connection, active provider/model, output mode, and thread id
 
 `/disconnect` - disconnect from the current database
 
@@ -91,9 +106,15 @@ There are a few system commands supported for meta operations:
 
 `/mode normal|verbose` - switch between compact output and full process tracing
 
-`/model` - show current model
+`/provider` - show current provider
 
-`/model <name>` - set model for current session
+`/provider <name>` - set provider for current session (`openai|anthropic|google_gemini|ollama`)
+
+`/model` - show current model and open model picker for current provider
+
+`/model list` - print known models for current provider
+
+`/model <name>` - set model directly (use this for models not in the built-in list)
 
 `/new` - start a new thread
 
@@ -102,6 +123,8 @@ There are a few system commands supported for meta operations:
 `/exit` or ctrl-c - exit
 
 Legacy forms (`help`, `connection`, `mode ...`, `exit`) still work.
+
+For Ollama, use a local model that supports tool calling. The built-in Ollama list includes tool-capable open models.
 
 ### Output Stages
 

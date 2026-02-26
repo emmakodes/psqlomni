@@ -1,6 +1,6 @@
 from typing import Annotated, Callable, TypedDict
 
-from langchain_core.messages import AIMessage, AnyMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
 from langgraph.graph import END
 from langgraph.graph.message import add_messages
 
@@ -28,7 +28,7 @@ def bootstrap_list_tables(_: AgentState) -> dict[str, list[AIMessage]]:
 
 
 def make_schema_selection_node(llm, get_schema_tool) -> Callable[[AgentState], dict[str, list[AnyMessage]]]:
-    llm_with_schema_tool = llm.bind_tools([get_schema_tool], tool_choice="any")
+    llm_with_schema_tool = llm.bind_tools([get_schema_tool])
 
     def select_schema(state: AgentState) -> dict[str, list[AnyMessage]]:
         prompt = [
@@ -40,6 +40,24 @@ def make_schema_selection_node(llm, get_schema_tool) -> Callable[[AgentState], d
             )
         ]
         response = llm_with_schema_tool.invoke(prompt + state["messages"])
+        if isinstance(response, AIMessage) and not response.tool_calls:
+            table_names = ""
+            for message in reversed(state["messages"]):
+                if isinstance(message, ToolMessage) and message.name == "sql_db_list_tables":
+                    table_names = str(message.content or "")
+                    break
+            fallback_call = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "sql_db_schema",
+                        "args": {"table_names": table_names},
+                        "id": "schema_fallback_call",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+            return {"messages": [fallback_call]}
         return {"messages": [response]}
 
     return select_schema

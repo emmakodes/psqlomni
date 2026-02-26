@@ -13,7 +13,16 @@ toml = "^0.10.2"
 langchain = "^1.2.10"
 langchain-community = "^0.4.1"
 langchain-openai = "^1.1.9"
+langchain-anthropic = {version = "^0.3.20", optional = true}
+langchain-google-genai = {version = "^2.1.12", optional = true}
+langchain-ollama = {version = "^0.3.8", optional = true}
 langgraph = "^1.0.5"
+
+[tool.poetry.extras]
+anthropic = ["langchain-anthropic"]
+google = ["langchain-google-genai"]
+ollama = ["langchain-ollama"]
+all-models = ["langchain-anthropic", "langchain-google-genai", "langchain-ollama"]
 
 
 [build-system]
