@@ -27,6 +27,7 @@ all-models = ["langchain-anthropic", "langchain-google-genai", "langchain-ollama
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"
 pytest-cov = "^6.2.1"
+ruff = "^0.15.4"
 
 
 [build-system]
