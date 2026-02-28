@@ -1,16 +1,19 @@
 from uuid import uuid4
+from dataclasses import replace
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
-import psycopg2
 from prompt_toolkit.application.current import get_app
 from prompt_toolkit.completion import ConditionalCompleter, WordCompleter
 from prompt_toolkit.filters import Condition
 from prompt_toolkit import PromptSession
 from prompt_toolkit import prompt
 from prompt_toolkit.shortcuts import radiolist_dialog
+from sqlalchemy.engine import make_url
 
 from psqlomni.config import (
+    DEFAULT_DB_PORT,
+    DEFAULT_DB_PORT_BY_DIALECT,
     DEFAULT_MODELS_BY_PROVIDER,
     DEFAULT_OLLAMA_BASE_URL,
     MODEL_CATALOG_BY_PROVIDER,
@@ -34,7 +37,12 @@ class PSqlomni:
         self.db = build_sql_database(self.config)
         self.llm = build_llm(self.config)
         self.tools = build_sql_tools(self.db, self.llm)
-        self.graph = build_sql_graph(self.llm, self.tools)
+        self.graph = build_sql_graph(
+            self.llm,
+            self.tools,
+            db_dialect=self.config.db_dialect,
+            db_name=self.config.db_name,
+        )
         self.thread_id = str(uuid4())
         self.known_thread_ids = {self.thread_id}
         self.renderer = ConsoleRenderer(mode="verbose")
@@ -93,11 +101,18 @@ Commands:
   /exit               Quit
             """.strip()
         )
-        print(
-            "Using connection "
-            f"{self.config.db_host}:{self.config.db_port}/{self.config.db_name} as {self.config.db_user} "
-            f"(port={self.config.db_port_mode}, password={self.config.db_password_mode})"
-        )
+        if self.config.db_uri:
+            print(
+                "Using connection "
+                f"{self.config.db_uri} "
+                f"(dialect={self.config.db_dialect}, password={self.config.db_password_mode})"
+            )
+        else:
+            print(
+                "Using connection "
+                f"{self.config.db_dialect}://{self.config.db_host}:{self.config.db_port}/{self.config.db_name} as {self.config.db_user} "
+                f"(port={self.config.db_port_mode}, password={self.config.db_password_mode})"
+            )
 
         while True:
             try:
@@ -158,6 +173,10 @@ Commands:
         if cmd in {"/connection", "connection"}:
             connected = self.graph is not None
             if connected:
+                if self.config.db_uri:
+                    print(f"URI: {self.config.db_uri}")
+                    print(f"URI Source: {self.config.db_uri_source}")
+                print(f"Dialect: {self.config.db_dialect}")
                 print(
                     f"Host: {self.config.db_host}, Database: {self.config.db_name}, User: {self.config.db_user}"
                 )
@@ -333,7 +352,12 @@ Commands:
             self.graph = None
             return
         self.tools = build_sql_tools(self.db, self.llm)
-        self.graph = build_sql_graph(self.llm, self.tools)
+        self.graph = build_sql_graph(
+            self.llm,
+            self.tools,
+            db_dialect=self.config.db_dialect,
+            db_name=self.config.db_name,
+        )
 
     def _print_model_catalog(self, provider: str) -> None:
         models = MODEL_CATALOG_BY_PROVIDER.get(provider, [])
@@ -380,69 +404,113 @@ Commands:
 
     def _connect_database_interactive(self) -> None:
         current_port = self.config.db_port or 5432
+        current_dialect = self.config.db_dialect or "postgresql"
+        current_uri = self.config.db_uri or ""
 
-        host = (prompt(f"DB host [{self.config.db_host}]: ") or self.config.db_host).strip()
-        dbname = (prompt(f"DB name [{self.config.db_name}]: ") or self.config.db_name).strip()
-        user = (prompt(f"DB user [{self.config.db_user}]: ") or self.config.db_user).strip()
-        port_raw = (prompt(f"DB port [{current_port}]: ") or str(current_port)).strip()
-        password_input = prompt("DB password (leave blank to reuse current): ", is_password=True)
-        password = password_input
-        password_source = "prompt"
-        if not password:
-            password = self.config.db_password
-            password_source = self.config.db_password_source
+        uri_raw = (prompt(f"DB URI [{current_uri or 'none'}]: ") or current_uri).strip()
+        if uri_raw:
+            candidate_config = replace(self.config, db_uri=uri_raw, db_uri_source="prompt")
+            try:
+                db = build_sql_database(candidate_config)
+                db.run_no_throw("SELECT 1")
+                parsed = make_url(uri_raw)
+            except Exception as exc:
+                print(f"Connection failed: {exc}")
+                return
 
-        try:
-            port = int(port_raw)
-        except ValueError:
-            print("Invalid port. Connection aborted.")
-            return
-
-        if not host or not dbname or not user:
-            print("Host, database, and user are required. Connection aborted.")
-            return
-
-        try:
-            kwargs = {
-                "host": host,
-                "dbname": dbname,
-                "user": user,
-                "port": port,
-                "connect_timeout": 10,
-            }
-            if password is not None and password != "":
-                kwargs["password"] = password
-            conn = psycopg2.connect(**kwargs)
-            conn.close()
-        except psycopg2.OperationalError as exc:
-            print(f"Connection failed: {exc}")
-            return
-
-        self.config.db_host = host
-        self.config.db_name = dbname
-        self.config.db_user = user
-        self.config.db_port = port
-        self.config.db_password = password
-        self.config.db_host_source = "prompt"
-        self.config.db_name_source = "prompt"
-        self.config.db_user_source = "prompt"
-        self.config.db_port_source = "prompt" if port != 5432 else "default"
-        self.config.db_password_source = password_source
-        self.config.db_port_mode = f"default(5432)" if port == 5432 else f"custom({port})"
-        if password is None:
-            self.config.db_password_mode = "missing"
-        elif password == "":
-            self.config.db_password_mode = "blank"
+            candidate_config.db_dialect = parsed.get_backend_name() or candidate_config.db_dialect
+            default_port = DEFAULT_DB_PORT_BY_DIALECT.get(candidate_config.db_dialect, DEFAULT_DB_PORT)
+            candidate_config.db_host = parsed.host or ""
+            candidate_config.db_name = parsed.database or ""
+            candidate_config.db_user = parsed.username or ""
+            candidate_config.db_password = parsed.password
+            candidate_config.db_port = int(parsed.port or default_port)
+            candidate_config.db_host_source = "uri" if candidate_config.db_host else "missing"
+            candidate_config.db_name_source = "uri" if candidate_config.db_name else "missing"
+            candidate_config.db_user_source = "uri" if candidate_config.db_user else "missing"
+            candidate_config.db_password_source = "uri" if parsed.password is not None else "missing"
+            candidate_config.db_port_source = "uri" if parsed.port else "default"
+            candidate_config.db_port_mode = (
+                f"default({default_port})" if parsed.port is None else f"custom({candidate_config.db_port})"
+            )
+            if candidate_config.db_password is None:
+                candidate_config.db_password_mode = "missing"
+            elif candidate_config.db_password == "":
+                candidate_config.db_password_mode = "blank"
+            else:
+                candidate_config.db_password_mode = "set"
+            self.config = candidate_config
+            self.db = db
         else:
-            self.config.db_password_mode = "set"
+            dialect = (prompt(f"DB dialect [{current_dialect}]: ") or current_dialect).strip().lower()
+            host = (prompt(f"DB host [{self.config.db_host}]: ") or self.config.db_host).strip()
+            dbname = (prompt(f"DB name [{self.config.db_name}]: ") or self.config.db_name).strip()
+            user = (prompt(f"DB user [{self.config.db_user}]: ") or self.config.db_user).strip()
+            port_raw = (prompt(f"DB port [{current_port}]: ") or str(current_port)).strip()
+            password_input = prompt("DB password (leave blank to reuse current): ", is_password=True)
+            password = password_input
+            password_source = "prompt"
+            if not password:
+                password = self.config.db_password
+                password_source = self.config.db_password_source
 
-        self.db = build_sql_database(self.config)
+            try:
+                port = int(port_raw)
+            except ValueError:
+                print("Invalid port. Connection aborted.")
+                return
+
+            if not host or not dbname or not user:
+                print("Host, database, and user are required. Connection aborted.")
+                return
+
+            candidate_config = replace(
+                self.config,
+                db_uri=None,
+                db_uri_source="missing",
+                db_dialect=dialect,
+                db_host=host,
+                db_name=dbname,
+                db_user=user,
+                db_port=port,
+                db_password=password,
+                db_host_source="prompt",
+                db_name_source="prompt",
+                db_user_source="prompt",
+                db_port_source="prompt",
+                db_password_source=password_source,
+                db_port_mode=(
+                    f"default({DEFAULT_DB_PORT_BY_DIALECT.get(dialect, DEFAULT_DB_PORT)})"
+                    if port == DEFAULT_DB_PORT_BY_DIALECT.get(dialect, DEFAULT_DB_PORT)
+                    else f"custom({port})"
+                ),
+                db_password_mode="missing" if password is None else ("blank" if password == "" else "set"),
+            )
+
+            try:
+                db = build_sql_database(candidate_config)
+                db.run_no_throw("SELECT 1")
+            except Exception as exc:
+                print(f"Connection failed: {exc}")
+                return
+
+            self.config = candidate_config
+            self.db = db
+
         self.tools = build_sql_tools(self.db, self.llm)
-        self.graph = build_sql_graph(self.llm, self.tools)
+        self.graph = build_sql_graph(
+            self.llm,
+            self.tools,
+            db_dialect=self.config.db_dialect,
+            db_name=self.config.db_name,
+        )
         save_connection_config(self.config)
         self.thread_id = str(uuid4())
         self.known_thread_ids.add(self.thread_id)
-        print(f"Connected to {host}:{port}/{dbname} as {user}")
+        target = self.config.db_uri or (
+            f"{self.config.db_dialect}://{self.config.db_host}:{self.config.db_port}/{self.config.db_name}"
+        )
+        print(f"Connected to {target}")
         print(f"Started new thread: {self.thread_id}")
 
     def process_command(self, cmd: str) -> None:

@@ -6,13 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
-import psycopg2
 import toml
 from prompt_toolkit import prompt
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.engine import make_url
 
 DEFAULT_MODEL = "gpt-4.1-mini"
 DEFAULT_DB_PORT = 5432
+DEFAULT_DB_DIALECT = "postgresql"
 CONFIG_FILE = Path(os.path.expanduser("~/.psqlomni"))
 _MISSING = object()
 PROVIDER_ALIASES = {
@@ -32,6 +36,13 @@ DEFAULT_MODELS_BY_PROVIDER = {
     "ollama": "qwen3-coder-next",
 }
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_DB_PORT_BY_DIALECT = {
+    "postgresql": 5432,
+    "mysql": 3306,
+    "mariadb": 3306,
+    "mssql": 1433,
+    "oracle": 1521,
+}
 MODEL_CATALOG_BY_PROVIDER = {
     "openai": [
         "gpt-5.2",
@@ -95,6 +106,8 @@ MODEL_CATALOG_BY_PROVIDER = {
 
 @dataclass
 class AppConfig:
+    db_uri: str | None
+    db_dialect: str
     db_host: str
     db_port: int
     db_name: str
@@ -112,6 +125,7 @@ class AppConfig:
     db_name_source: str
     db_user_source: str
     db_password_source: str
+    db_uri_source: str
     db_port_mode: str
     db_password_mode: str
 
@@ -124,6 +138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-U", "--username", type=str, required=False)
     parser.add_argument("-d", "--dbname", type=str, required=False)
     parser.add_argument("--password", type=str, required=False)
+    parser.add_argument("--db-uri", type=str, required=False)
+    parser.add_argument("--db-dialect", type=str, required=False)
     return parser.parse_args()
 
 
@@ -175,10 +191,40 @@ def _password_mode(password: str | None) -> str:
     return "set"
 
 
-def _port_mode(port: int) -> str:
-    if int(port) == DEFAULT_DB_PORT:
-        return f"default({DEFAULT_DB_PORT})"
+def _port_mode(port: int, dialect: str) -> str:
+    default_port = _default_port_for_dialect(dialect)
+    if int(port) == default_port:
+        return f"default({default_port})"
     return f"custom({port})"
+
+
+def _default_port_for_dialect(dialect: str) -> int:
+    return DEFAULT_DB_PORT_BY_DIALECT.get(dialect.lower(), DEFAULT_DB_PORT)
+
+
+def _build_structured_db_uri(
+    db_dialect: str,
+    host: str,
+    dbname: str,
+    user: str,
+    password: str | None,
+    port: int,
+) -> str:
+    normalized = (db_dialect or DEFAULT_DB_DIALECT).strip().lower()
+    if normalized.startswith("sqlite"):
+        if dbname in {"", ":memory:"}:
+            return "sqlite:///:memory:"
+        if dbname.startswith("/"):
+            return f"sqlite:////{dbname.lstrip('/')}"
+        return f"sqlite:///{dbname}"
+
+    user_part = quote_plus(user)
+    host_part = host
+    db_part = quote_plus(dbname)
+    if password is None or password == "":
+        return f"{normalized}://{user_part}@{host_part}:{port}/{db_part}"
+    password_part = quote_plus(password)
+    return f"{normalized}://{user_part}:{password_part}@{host_part}:{port}/{db_part}"
 
 
 def normalize_model_provider(raw_provider: str | None) -> str:
@@ -188,27 +234,31 @@ def normalize_model_provider(raw_provider: str | None) -> str:
     return "openai"
 
 
-def _validate_connection(host: str, dbname: str, user: str, password: str | None, port: int) -> None:
-    kwargs = {
-        "host": host,
-        "dbname": dbname,
-        "user": user,
-        "port": port,
-        "connect_timeout": 10,
-    }
-    if password is not None and password != "":
-        kwargs["password"] = password
-
-    conn = psycopg2.connect(**kwargs)
+def _validate_connection(db_uri: str) -> None:
+    engine = create_engine(db_uri)
     try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT version();")
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
     finally:
-        conn.close()
+        engine.dispose()
 
 
 def resolve_app_config(args: argparse.Namespace) -> AppConfig:
     config = _load_config_file()
+    db_uri, db_uri_source = _resolve_value(
+        config=config,
+        config_key="DB_URI",
+        cli_value=args.db_uri,
+        env_key="DB_URI",
+    )
+    db_dialect, _ = _resolve_value(
+        config=config,
+        config_key="DBDIALECT",
+        cli_value=args.db_dialect,
+        env_key="DBDIALECT",
+        default=DEFAULT_DB_DIALECT,
+    )
+    db_dialect = (str(db_dialect or DEFAULT_DB_DIALECT)).strip().lower()
 
     db_host, host_source = _resolve_value(
         config=config,
@@ -245,53 +295,90 @@ def resolve_app_config(args: argparse.Namespace) -> AppConfig:
     try:
         db_port = int(db_port_raw)
     except (TypeError, ValueError):
-        db_port = DEFAULT_DB_PORT
+        db_port = _default_port_for_dialect(db_dialect)
         port_source = "default"
 
-    needs_setup = not db_host or not db_name or not db_user
-    if needs_setup:
-        print("Let's setup your database connection...")
-
-    while not db_host or not db_name or not db_user:
-        if not db_host:
-            db_host = prompt("Enter your database host: ")
-            host_source = "prompt"
-        if not db_user:
-            db_user = prompt("Enter your database username: ")
-            db_user_source = "prompt"
-        if not db_name:
-            db_name = prompt("Enter the database name: ")
-            db_name_source = "prompt"
-        port_input = prompt(f"Enter your database port ({db_port}): ")
-        if port_input:
-            db_port = int(port_input)
-            port_source = "prompt"
-
-    if db_password is None:
-        db_password = prompt("Enter your database password (leave empty if none): ", is_password=True)
-        db_password_source = "prompt"
-
-    try:
-        _validate_connection(db_host, db_name, db_user, db_password, db_port)
-    except psycopg2.OperationalError as exc:
-        print(f"Connection validation failed: {exc}")
-        print("Let's setup your database connection...")
+    if db_uri:
         while True:
-            db_host = prompt("Enter your database host: ")
-            db_user = prompt("Enter your database username: ")
-            db_name = prompt("Enter the database name: ")
-            db_port = int(prompt(f"Enter your database port ({DEFAULT_DB_PORT}): ") or DEFAULT_DB_PORT)
-            db_password = prompt("Enter your database password (leave empty if none): ", is_password=True)
-            host_source = "prompt"
-            db_user_source = "prompt"
-            db_name_source = "prompt"
-            port_source = "prompt" if db_port != DEFAULT_DB_PORT else "default"
-            db_password_source = "prompt"
             try:
-                _validate_connection(db_host, db_name, db_user, db_password, db_port)
+                parsed_url = make_url(str(db_uri))
+                db_dialect = parsed_url.get_backend_name() or db_dialect
+                db_host = parsed_url.host or ""
+                db_name = parsed_url.database or ""
+                db_user = parsed_url.username or ""
+                db_password = parsed_url.password
+                db_port = int(parsed_url.port or _default_port_for_dialect(db_dialect))
+                host_source = "uri" if db_host else "missing"
+                db_name_source = "uri" if db_name else "missing"
+                db_user_source = "uri" if db_user else "missing"
+                db_password_source = "uri" if db_password is not None else "missing"
+                port_source = "uri" if parsed_url.port else "default"
+                _validate_connection(str(db_uri))
                 break
-            except psycopg2.OperationalError as prompt_exc:
-                print(f"Error: {prompt_exc}")
+            except (SQLAlchemyError, ValueError) as exc:
+                print(f"Connection validation failed: {exc}")
+                db_uri = prompt("Enter a valid SQLAlchemy DB URI: ").strip()
+                db_uri_source = "prompt"
+                if not db_uri:
+                    db_uri = None
+                    db_uri_source = "missing"
+                    break
+
+    if not db_uri:
+        needs_setup = not db_host or not db_name or not db_user
+        if needs_setup:
+            print("Let's setup your database connection...")
+
+        while not db_host or not db_name or not db_user:
+            if not db_host:
+                db_host = prompt("Enter your database host: ")
+                host_source = "prompt"
+            if not db_user:
+                db_user = prompt("Enter your database username: ")
+                db_user_source = "prompt"
+            if not db_name:
+                db_name = prompt("Enter the database name: ")
+                db_name_source = "prompt"
+            port_input = prompt(f"Enter your database port ({db_port}): ")
+            if port_input:
+                db_port = int(port_input)
+                port_source = "prompt"
+
+        if db_password is None:
+            db_password = prompt("Enter your database password (leave empty if none): ", is_password=True)
+            db_password_source = "prompt"
+
+        while True:
+            try:
+                candidate_uri = _build_structured_db_uri(
+                    db_dialect=db_dialect,
+                    host=db_host,
+                    dbname=db_name,
+                    user=db_user,
+                    password=db_password,
+                    port=db_port,
+                )
+                _validate_connection(candidate_uri)
+                break
+            except (SQLAlchemyError, ValueError) as exc:
+                print(f"Connection validation failed: {exc}")
+                print("Let's setup your database connection...")
+                db_dialect = (
+                    prompt(f"Enter your SQL dialect [{db_dialect or DEFAULT_DB_DIALECT}]: ")
+                    or db_dialect
+                    or DEFAULT_DB_DIALECT
+                ).strip().lower()
+                db_host = prompt("Enter your database host: ")
+                db_user = prompt("Enter your database username: ")
+                db_name = prompt("Enter the database name: ")
+                db_port_default = _default_port_for_dialect(db_dialect)
+                db_port = int(prompt(f"Enter your database port ({db_port_default}): ") or db_port_default)
+                db_password = prompt("Enter your database password (leave empty if none): ", is_password=True)
+                host_source = "prompt"
+                db_user_source = "prompt"
+                db_name_source = "prompt"
+                port_source = "prompt" if db_port != db_port_default else "default"
+                db_password_source = "prompt"
 
     provider_raw = config.get("model_provider") or os.environ.get("MODEL_PROVIDER")
     if provider_raw is None:
@@ -330,6 +417,8 @@ def resolve_app_config(args: argparse.Namespace) -> AppConfig:
     sample_rows_int = int(sample_rows)
 
     merged = {
+        "DB_URI": db_uri or "",
+        "DBDIALECT": db_dialect,
         "DBHOST": db_host,
         "DBPORT": db_port,
         "DBNAME": db_name,
@@ -346,6 +435,8 @@ def resolve_app_config(args: argparse.Namespace) -> AppConfig:
     _save_config_file(merged)
 
     return AppConfig(
+        db_uri=db_uri,
+        db_dialect=db_dialect,
         db_host=db_host,
         db_port=db_port,
         db_name=db_name,
@@ -363,7 +454,8 @@ def resolve_app_config(args: argparse.Namespace) -> AppConfig:
         db_name_source=db_name_source,
         db_user_source=db_user_source,
         db_password_source=db_password_source,
-        db_port_mode=_port_mode(db_port),
+        db_uri_source=db_uri_source if db_uri else "missing",
+        db_port_mode=_port_mode(db_port, db_dialect),
         db_password_mode=_password_mode(db_password),
     )
 
@@ -372,6 +464,8 @@ def save_connection_config(config: AppConfig) -> None:
     existing = _load_config_file()
     existing.update(
         {
+            "DB_URI": config.db_uri if config.db_uri is not None else "",
+            "DBDIALECT": config.db_dialect,
             "DBHOST": config.db_host,
             "DBPORT": config.db_port,
             "DBNAME": config.db_name,

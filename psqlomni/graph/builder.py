@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
     from langgraph.checkpoint.memory import MemorySaver as InMemorySaver
 
 
-def build_sql_graph(llm, tools):
+def build_sql_graph(llm, tools, db_dialect: str, db_name: str):
     tool_nodes = build_tool_nodes(tools)
 
     graph = StateGraph(AgentState)
@@ -23,7 +23,10 @@ def build_sql_graph(llm, tools):
     graph.add_node("list_tables", tool_nodes.list_tables_node)
     graph.add_node("select_schema", make_schema_selection_node(llm, tools["sql_db_schema"]))
     graph.add_node("get_schema", tool_nodes.get_schema_node)
-    graph.add_node("generate_query", make_query_generation_node(llm, tools["sql_db_query"]))
+    graph.add_node(
+        "generate_query",
+        make_query_generation_node(llm, tools["sql_db_query"], db_dialect=db_dialect, db_name=db_name),
+    )
     graph.add_node("run_query", tool_nodes.run_query_node)
 
     graph.add_edge(START, "bootstrap_list_tables")

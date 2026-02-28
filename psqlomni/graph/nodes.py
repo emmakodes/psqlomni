@@ -63,14 +63,23 @@ def make_schema_selection_node(llm, get_schema_tool) -> Callable[[AgentState], d
     return select_schema
 
 
-def make_query_generation_node(llm, query_tool) -> Callable[[AgentState], dict[str, list[AnyMessage]]]:
+def make_query_generation_node(
+    llm,
+    query_tool,
+    db_dialect: str,
+    db_name: str,
+) -> Callable[[AgentState], dict[str, list[AnyMessage]]]:
     llm_with_query_tool = llm.bind_tools([query_tool])
+    dialect = (db_dialect or "sql").strip()
+    database_name = (db_name or "unknown").strip()
 
     def generate_query_or_answer(state: AgentState) -> dict[str, list[AnyMessage]]:
         prompt = [
             SystemMessage(
                 content=(
-                    "You are a SQL agent for PostgreSQL. Use sql_db_query to execute SQL when needed. "
+                    f"You are a SQL agent connected to database '{database_name}' using dialect '{dialect}'. "
+                    "Generate SQL compatible with this dialect. "
+                    "Use sql_db_query to execute SQL when needed. "
                     "Every query execution requires human approval via interrupt. "
                     "If execution is cancelled or feedback is returned, revise the SQL or explain clearly. "
                     "Never make up query results; rely on tool outputs."

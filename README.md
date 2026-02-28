@@ -1,7 +1,7 @@
 # psqlomni  
 (psql powered with natural language)
 
-An LLM-powered chat interface to your database. This tool understands Postgres syntax and can translate English prompts into SQL. It uses a LangGraph + LangChain SQL agent and supports OpenAI, Anthropic, Google Gemini, and Ollama.
+An LLM-powered chat interface to your database. This tool can work with most SQLAlchemy-supported SQL databases and translate English prompts into SQL. It uses a LangGraph + LangChain SQL agent and supports OpenAI, Anthropic, Google Gemini, and Ollama.
 
 This provides the quickest way to enable LLM chat with your data - no preparation is needed.
 
@@ -42,7 +42,7 @@ or use `python -m psqlomni` to run from source.
 
 ## What can it do?
 
-The model understands most Postgres syntax, so it can generate both generic SQL commands as well as very Postgres-specific ones like querying system settings. It can answer questions based on the databases' schema as well as on the databases' content (like describing a specific table).
+The model can generate SQL for the connected database dialect and answer questions based on schema and data (like describing a specific table).
 
 The LLM is also good at analyzing tables, understanding what they are likely used for, and inferring relationships between tables. It is good at writing JOINs between tables without explicit instruction.
 
@@ -56,8 +56,16 @@ It also maintains a history of the chat, so you can easily ask follow up questio
 
 ### Configuration
 
-You can configure the database connection either using `psql` style command line arguments
-or the env vars `DBHOST`, `DBNAME`, `DBUSER`, `DBPASSWORD`, `DBPORT`.
+You can configure the database connection with either:
+
+- `DB_URI` (recommended): full SQLAlchemy URI, works for most SQL backends.
+- structured fields when `DB_URI` is not set: `DBDIALECT`, `DBHOST`, `DBNAME`, `DBUSER`, `DBPASSWORD`, `DBPORT`.
+
+CLI flags:
+
+- `--db-uri`
+- `--db-dialect`
+- plus existing `psql`-style flags (`-h`, `-p`, `-U`, `-d`, `--password`) for structured mode.
 
 Model configuration is controlled with:
 
