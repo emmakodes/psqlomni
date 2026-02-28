@@ -24,6 +24,10 @@ google = ["langchain-google-genai"]
 ollama = ["langchain-ollama"]
 all-models = ["langchain-anthropic", "langchain-google-genai", "langchain-ollama"]
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.2"
+pytest-cov = "^6.2.1"
+
 
 [build-system]
 requires = ["poetry-core"]
@@ -31,3 +35,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 psqlomni = 'psqlomni.__main__:main'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
