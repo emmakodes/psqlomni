@@ -1,0 +1,12 @@
+site_name: psqlomni Docs
+site_description: LLM-powered chat interface for SQL databases
+repo_url: https://github.com/emmakodes/psqlomni
+repo_name: emmakodes/psqlomni
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Commands: commands.md
