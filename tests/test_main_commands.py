@@ -155,3 +155,154 @@ def test_prompt_query_decision_paths(monkeypatch, capsys):
     prompts = iter(["c"])
     monkeypatch.setattr(main_mod, "prompt", lambda *_args, **_kwargs: next(prompts))
     assert app._prompt_query_decision({"query": "SELECT 1", "is_mutating": False}) == {"action": "cancel"}
+
+
+def test_connect_database_interactive_uri_mode(monkeypatch, capsys):
+    app = _app()
+    app.thread_id = "thread-1"
+    app.known_thread_ids = {"thread-1"}
+
+    prompt_calls = []
+
+    def fake_prompt(message, **kwargs):
+        prompt_calls.append((message, kwargs))
+        return "mysql://bob:topsecret@db.internal:3307/warehouse"
+
+    db_calls = []
+    run_calls = []
+
+    class FakeDB:
+        def run_no_throw(self, query):
+            run_calls.append(query)
+
+    def fake_build_sql_database(config):
+        db_calls.append(config)
+        return FakeDB()
+
+    tools_calls = []
+
+    def fake_build_sql_tools(db, llm):
+        tools_calls.append((db, llm))
+        return {"sql_query": object()}
+
+    graph_calls = []
+
+    def fake_build_sql_graph(llm, tools, db_dialect, db_name):
+        graph_calls.append((llm, tools, db_dialect, db_name))
+        return object()
+
+    saved_configs = []
+    monkeypatch.setattr(main_mod, "prompt", fake_prompt)
+    monkeypatch.setattr(main_mod, "build_sql_database", fake_build_sql_database)
+    monkeypatch.setattr(main_mod, "build_sql_tools", fake_build_sql_tools)
+    monkeypatch.setattr(main_mod, "build_sql_graph", fake_build_sql_graph)
+    monkeypatch.setattr(main_mod, "save_connection_config", lambda config: saved_configs.append(config))
+    monkeypatch.setattr(main_mod, "uuid4", lambda: "thread-2")
+
+    app._connect_database_interactive()
+
+    assert len(prompt_calls) == 1
+    assert prompt_calls[0][0].startswith("DB URI [")
+    assert db_calls[0].db_uri == "mysql://bob:topsecret@db.internal:3307/warehouse"
+    assert run_calls == ["SELECT 1"]
+    assert app.config.db_dialect == "mysql"
+    assert app.config.db_host == "db.internal"
+    assert app.config.db_port == 3307
+    assert app.config.db_name == "warehouse"
+    assert app.config.db_user == "bob"
+    assert app.config.db_password == "topsecret"
+    assert app.config.db_uri_source == "prompt"
+    assert app.config.db_port_mode == "custom(3307)"
+    assert app.config.db_password_mode == "set"
+    assert len(tools_calls) == 1
+    assert len(graph_calls) == 1
+    assert graph_calls[0][2] == "mysql"
+    assert graph_calls[0][3] == "warehouse"
+    assert saved_configs == [app.config]
+    assert app.thread_id == "thread-2"
+    assert "thread-2" in app.known_thread_ids
+
+    output = capsys.readouterr().out
+    assert "Connected to mysql://bob:topsecret@db.internal:3307/warehouse" in output
+    assert "Started new thread: thread-2" in output
+
+
+def test_connect_database_interactive_structured_mode(monkeypatch, capsys):
+    app = _app()
+    app.config.db_password = "existing-secret"
+    app.config.db_password_source = "env"
+
+    prompt_answers = iter(
+        [
+            "",
+            "mysql",
+            "db.prod",
+            "events",
+            "reporter",
+            "3306",
+            "",
+        ]
+    )
+    prompt_calls = []
+
+    def fake_prompt(message, **kwargs):
+        prompt_calls.append((message, kwargs))
+        return next(prompt_answers)
+
+    db_calls = []
+    run_calls = []
+
+    class FakeDB:
+        def run_no_throw(self, query):
+            run_calls.append(query)
+
+    def fake_build_sql_database(config):
+        db_calls.append(config)
+        return FakeDB()
+
+    tools_calls = []
+
+    def fake_build_sql_tools(db, llm):
+        tools_calls.append((db, llm))
+        return {"sql_query": object()}
+
+    graph_calls = []
+
+    def fake_build_sql_graph(llm, tools, db_dialect, db_name):
+        graph_calls.append((llm, tools, db_dialect, db_name))
+        return object()
+
+    saved_configs = []
+    monkeypatch.setattr(main_mod, "prompt", fake_prompt)
+    monkeypatch.setattr(main_mod, "build_sql_database", fake_build_sql_database)
+    monkeypatch.setattr(main_mod, "build_sql_tools", fake_build_sql_tools)
+    monkeypatch.setattr(main_mod, "build_sql_graph", fake_build_sql_graph)
+    monkeypatch.setattr(main_mod, "save_connection_config", lambda config: saved_configs.append(config))
+    monkeypatch.setattr(main_mod, "uuid4", lambda: "thread-9")
+
+    app._connect_database_interactive()
+
+    assert len(prompt_calls) == 7
+    assert prompt_calls[0][0].startswith("DB URI [")
+    assert prompt_calls[-1][1]["is_password"] is True
+    assert db_calls[0].db_uri is None
+    assert db_calls[0].db_dialect == "mysql"
+    assert db_calls[0].db_host == "db.prod"
+    assert db_calls[0].db_name == "events"
+    assert db_calls[0].db_user == "reporter"
+    assert db_calls[0].db_port == 3306
+    assert db_calls[0].db_password == "existing-secret"
+    assert db_calls[0].db_password_source == "env"
+    assert db_calls[0].db_port_mode == "default(3306)"
+    assert run_calls == ["SELECT 1"]
+    assert len(tools_calls) == 1
+    assert len(graph_calls) == 1
+    assert graph_calls[0][2] == "mysql"
+    assert graph_calls[0][3] == "events"
+    assert saved_configs == [app.config]
+    assert app.thread_id == "thread-9"
+    assert "thread-9" in app.known_thread_ids
+
+    output = capsys.readouterr().out
+    assert "Connected to mysql://db.prod:3306/events" in output
+    assert "Started new thread: thread-9" in output
