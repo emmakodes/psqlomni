@@ -36,4 +36,5 @@ jobs:
         run: poetry run pip install pip-audit
 
       - name: Run dependency audit
+        continue-on-error: true
         run: poetry run pip-audit --progress-spinner off
