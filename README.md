@@ -1,29 +1,34 @@
-# psqlomni  
-(psql powered with natural language)
+# psqlomni
 
-An LLM-powered chat interface to your database. This tool can work with most SQLAlchemy-supported SQL databases and translate English prompts into SQL. It uses a LangGraph + LangChain SQL agent and supports OpenAI, Anthropic, Google Gemini, and Ollama.
+Natural language chat for your SQL database.
 
-This provides the quickest way to enable LLM chat with your data - no preparation is needed.
+[![Build](https://img.shields.io/github/actions/workflow/status/emmakodes/psqlomni/release.yml?job=build&label=build)](https://github.com/emmakodes/psqlomni/actions/workflows/release.yml)
+[![Test](https://img.shields.io/github/actions/workflow/status/emmakodes/psqlomni/ci.yml?branch=main&job=test&label=test)](https://github.com/emmakodes/psqlomni/actions/workflows/ci.yml)
+[![Publish](https://img.shields.io/github/actions/workflow/status/emmakodes/psqlomni/release.yml?job=publish&label=publish)](https://github.com/emmakodes/psqlomni/actions/workflows/release.yml)
 
+`psqlomni` translates plain English into SQL and runs it against your database.
 
-Here's a quick demo showing natural language queries:
+It supports SQLAlchemy-compatible databases and multiple model providers:
 
-https://github.com/emmakodes/psqlomni/assets/34986076/0c58f4fd-c359-47c2-8e3c-4b068545e522
+- OpenAI
+- Anthropic
+- Google Gemini
+- Ollama
 
-## Installation
+## Demo Video
 
-You will need:
+Add your project demo video here:
 
-1. credentials for your database
-2. credentials for your selected model provider.
+- `TODO: Replace this with your demo link`
+- Example: `https://github.com/<org>/<repo>/assets/<video-id>`
 
-then
+## Install
 
-```
+```bash
 pip install psqlomni
 ```
 
-Install optional providers only when needed:
+Optional provider extras:
 
 ```bash
 pip install "psqlomni[anthropic]"
@@ -32,115 +37,77 @@ pip install "psqlomni[ollama]"
 pip install "psqlomni[all-models]"
 ```
 
-or download the source. 
+## Run
 
-Run the CLI with:
+```bash
+psqlomni
+```
 
-    psqlomni
+Or from source:
 
-or use `python -m psqlomni` to run from source.
+```bash
+python -m psqlomni
+```
 
-## What can it do?
+## Quick Setup
 
-The model can generate SQL for the connected database dialect and answer questions based on schema and data (like describing a specific table).
+Set either a full DB URI (recommended) or individual DB fields.
 
-The LLM is also good at analyzing tables, understanding what they are likely used for, and inferring relationships between tables. It is good at writing JOINs between tables without explicit instruction.
+### Option 1: Full DB URI (recommended)
 
-It can write queries to group and summarize results.
+```bash
+export DB_URI="postgresql+psycopg2://user:password@host:5432/dbname"
+```
 
-It can recover from errors by running a generated query, catching the traceback and regenerating it correctly.
+### Option 2: Individual DB Fields
 
-It will save tokens by only retrieving the schema from relevant tables.
+```bash
+export DBDIALECT="postgresql"
+export DBHOST="localhost"
+export DBPORT="5432"
+export DBNAME="mydb"
+export DBUSER="myuser"
+export DBPASSWORD="mypassword"
+```
 
-It also maintains a history of the chat, so you can easily ask follow up questions.
+### Model Provider
 
-### Configuration
+```bash
+export MODEL_PROVIDER="openai"
+export MODEL="gpt-4o-mini"
+export OPENAI_API_KEY="your-key"
+```
 
-You can configure the database connection with either:
+When values are missing, `psqlomni` prompts you interactively.
 
-- `DB_URI` (recommended): full SQLAlchemy URI, works for most SQL backends.
-- structured fields when `DB_URI` is not set: `DBDIALECT`, `DBHOST`, `DBNAME`, `DBUSER`, `DBPASSWORD`, `DBPORT`.
+## What It Does
 
-CLI flags:
+- Converts natural language prompts into SQL
+- Shows SQL for approval before execution
+- Lets you edit SQL before running it
+- Retries when SQL fails, then asks for approval again
+- Keeps conversation history for follow-up questions
+- Supports a normal mode and a verbose trace mode
 
-- `--db-uri`
-- `--db-dialect`
-- plus existing `psql`-style flags (`-h`, `-p`, `-U`, `-d`, `--password`) for structured mode.
+## Useful Commands
 
-Model configuration is controlled with:
+- `/help` - list commands
+- `/connection` - show active DB and model
+- `/connect` - connect to another database
+- `/mode normal|verbose` - switch output detail
+- `/provider` - show or set provider
+- `/model` - show or set model
+- `/new` - start a new thread
+- `/resume <thread_id>` - resume a thread
+- `/exit` - quit
 
-- `MODEL_PROVIDER` (`openai|anthropic|google_gemini|ollama`)
-- `MODEL` (provider model id)
-- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`
-- `OLLAMA_BASE_URL` (for local models, default `http://localhost:11434`)
+## Safety
 
-When you first run the program it prompts for missing DB and provider credentials.
+Every generated SQL query requires your approval before execution.
 
-After first setup all the configuration information is stored in `~/.psqlomni`. Delete that
-file if you want to start over.
+## Docs
 
-You can specify the number of sample rows that will be appended to each table description. This can increase performance as demonstrated in the paper [Rajkumar et al, 2022](https://arxiv.org/abs/2204.00498). Follows best practices as specified in: [Rajkumar et al, 2022](https://arxiv.org/abs/2204.00498)
-
-## How it works
-
-`psqlomni` uses a LangGraph SQL agent flow with explicit tool nodes:
-
-- table discovery tool node
-- schema tool node
-- query tool node
-
-Every generated SQL query is paused by an interrupt before execution. You can:
-
-- accept and run the query
-- edit the SQL and run the edited query
-- send feedback without execution
-- cancel execution
-
-If an error is returned, the agent can revise the query and request approval again.
-
-### Command Reference
-
-There are a few system commands supported for meta operations: 
-
-`/` - open an arrow-key command palette and press enter to run a command
-
-`/help` - show system commands
-
-`/connection` - show current db connection, active provider/model, output mode, and thread id
-
-`/disconnect` - disconnect from the current database
-
-`/connect` - connect to a different database (interactive prompts)
-
-`/mode normal|verbose` - switch between compact output and full process tracing
-
-`/provider` - show current provider
-
-`/provider <name>` - set provider for current session (`openai|anthropic|google_gemini|ollama`)
-
-`/model` - show current model and open model picker for current provider
-
-`/model list` - print known models for current provider
-
-`/model <name>` - set model directly (use this for models not in the built-in list)
-
-`/new` - start a new thread
-
-`/resume <thread_id>` - resume a prior in-memory thread from this session
-
-`/exit` or ctrl-c - exit
-
-Legacy forms (`help`, `connection`, `mode ...`, `exit`) still work.
-
-For Ollama, use a local model that supports tool calling. The built-in Ollama list includes tool-capable open models.
-
-### Output Stages
-
-In verbose mode, each turn is labeled so the process is easy to follow:
-
-- `[USER]` - your prompt
-- `[AGENT]` - planning state before tool calls
-- `[TOOL CALL]` - tool selected with arguments
-- `[TOOL RESULT:<name>]` - result returned by the tool
-- `[APPROVAL REQUIRED]` - SQL that must be accepted/edited/cancelled before execution
-- `[FINAL]` - final assistant response
+- [Contributing](CONTRIBUTING.md)
+- [Releasing](RELEASING.md)
+- [Security](SECURITY.md)
+- [Project docs](docs/)
