@@ -6,7 +6,7 @@ Natural language chat for your SQL database.
 [![Test](https://img.shields.io/github/actions/workflow/status/emmakodes/psqlomni/ci.yml?branch=main&job=test&label=test)](https://github.com/emmakodes/psqlomni/actions/workflows/ci.yml)
 [![Publish](https://img.shields.io/github/actions/workflow/status/emmakodes/psqlomni/release.yml?job=publish&label=publish)](https://github.com/emmakodes/psqlomni/actions/workflows/release.yml)
 
-`psqlomni` translates plain English into SQL and runs it against your database.
+`psqlomni` translates plain English into SQL and runs it against your database with approval.
 
 It supports SQLAlchemy-compatible databases and multiple model providers:
 
