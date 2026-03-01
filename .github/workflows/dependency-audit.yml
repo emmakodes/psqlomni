@@ -1,0 +1,39 @@
+name: Dependency Audit
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "poetry.lock"
+      - ".github/workflows/dependency-audit.yml"
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --with dev
+
+      - name: Install pip-audit
+        run: poetry run pip install pip-audit
+
+      - name: Run dependency audit
+        run: poetry run pip-audit --progress-spinner off
