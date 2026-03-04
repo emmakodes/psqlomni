@@ -84,7 +84,7 @@ class PSqlomni:
 
         print(
             """
-Welcome to PSQLOMNI (LangGraph SQL Agent).
+Welcome to PSQLOMNI (SQL Agent).
 Commands:
   /                   Show slash commands
   /help               Show slash commands
