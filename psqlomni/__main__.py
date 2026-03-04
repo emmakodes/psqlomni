@@ -448,7 +448,7 @@ Commands:
         else:
             dialect = (prompt(f"DB dialect [{current_dialect}]: ") or current_dialect).strip().lower()
             host = (prompt(f"DB host [{self.config.db_host}]: ") or self.config.db_host).strip()
-            dbname = (prompt(f"DB name [{self.config.db_name}]: ") or self.config.db_name).strip()
+            dbname = (prompt("DB name [current_db]: ") or self.config.db_name).strip()
             user = (prompt(f"DB user [{self.config.db_user}]: ") or self.config.db_user).strip()
             port_raw = (prompt(f"DB port [{current_port}]: ") or str(current_port)).strip()
             password_input = prompt("DB password (leave blank to reuse current): ", is_password=True)
