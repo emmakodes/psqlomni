@@ -99,3 +99,43 @@ def test_resolve_app_config_db_uri_from_cli(monkeypatch, tmp_path):
     assert app.db_uri == "sqlite:///:memory:"
     assert app.db_uri_source == "cli"
     assert app.db_dialect == "sqlite"
+
+
+def test_save_model_config_updates_existing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(cfg, "CONFIG_FILE", tmp_path / "psqlomni.json")
+    cfg.CONFIG_FILE.write_text(
+        '{"DBHOST":"db.internal","DBNAME":"analytics","model_provider":"openai","model":"gpt-4.1-mini"}',
+        encoding="utf-8",
+    )
+    app = cfg.AppConfig(
+        db_uri=None,
+        db_dialect="postgresql",
+        db_host="db.internal",
+        db_port=5432,
+        db_name="analytics",
+        db_user="service",
+        db_password="secret",
+        model_provider="google_gemini",
+        openai_api_key=None,
+        anthropic_api_key=None,
+        google_api_key="gk_test",
+        ollama_base_url=cfg.DEFAULT_OLLAMA_BASE_URL,
+        model="gemini-2.5-flash",
+        sample_rows_in_table_info=3,
+        db_host_source="saved",
+        db_port_source="default",
+        db_name_source="saved",
+        db_user_source="saved",
+        db_password_source="saved",
+        db_uri_source="missing",
+        db_port_mode="default(5432)",
+        db_password_mode="set",
+    )
+
+    cfg.save_model_config(app)
+    payload = cfg._load_config_file()
+    assert payload["DBHOST"] == "db.internal"
+    assert payload["DBNAME"] == "analytics"
+    assert payload["model_provider"] == "google_gemini"
+    assert payload["model"] == "gemini-2.5-flash"
+    assert payload["GOOGLE_API_KEY"] == "gk_test"

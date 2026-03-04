@@ -83,15 +83,31 @@ def test_handle_valid_provider_switch(monkeypatch, capsys):
     app = _app()
     app.config.openai_api_key = "ok_test"
     app.config.google_api_key = "gk_test"
+    saved_configs = []
 
     monkeypatch.setattr(app, "_rebuild_model_runtime", lambda: None)
     monkeypatch.setattr(app, "_pick_model_interactive", lambda: None)
+    monkeypatch.setattr(main_mod, "save_model_config", lambda config: saved_configs.append(config))
 
     assert app._handle_slash_or_legacy_command("/provider google") is True
     assert app.config.model_provider == "google_gemini"
     assert app.config.model == main_mod.DEFAULT_MODELS_BY_PROVIDER["google_gemini"]
+    assert saved_configs == [app.config]
     output = capsys.readouterr().out
     assert "Provider set for this session: google_gemini" in output
+
+
+def test_handle_model_switch_persists(monkeypatch, capsys):
+    app = _app()
+    saved_configs = []
+
+    monkeypatch.setattr(app, "_rebuild_model_runtime", lambda: None)
+    monkeypatch.setattr(main_mod, "save_model_config", lambda config: saved_configs.append(config))
+
+    assert app._handle_slash_or_legacy_command("/model gpt-4.1") is True
+    assert app.config.model == "gpt-4.1"
+    assert saved_configs == [app.config]
+    assert "Model set for this session: gpt-4.1" in capsys.readouterr().out
 
 
 def test_handle_connection_new_resume_and_exit(monkeypatch, capsys):
