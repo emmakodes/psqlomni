@@ -22,6 +22,7 @@ from psqlomni.config import (
     parse_args,
     resolve_app_config,
     save_connection_config,
+    save_model_config,
 )
 from psqlomni.db import build_sql_database
 from psqlomni.graph.builder import build_sql_graph
@@ -268,6 +269,7 @@ Commands:
                         self.config.model = previous_model
                         self.llm, self.tools, self.graph = previous_runtime
                         print(f"Reverted provider/model due to error: {default_exc}")
+            save_model_config(self.config)
             print(f"Provider set for this session: {provider}")
             print(f"Model set for this session: {self.config.model}")
             return True
@@ -283,6 +285,7 @@ Commands:
                 self.config.model = picked_model
                 try:
                     self._rebuild_model_runtime()
+                    save_model_config(self.config)
                     print(f"Model set for this session: {self.config.model}")
                 except Exception as exc:
                     self.config.model = previous_model
@@ -309,6 +312,7 @@ Commands:
                 self.llm, self.tools, self.graph = previous_runtime
                 print(f"Unable to set model: {exc}")
                 return True
+            save_model_config(self.config)
             print(f"Model set for this session: {model}")
             return True
 

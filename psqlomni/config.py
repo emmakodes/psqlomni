@@ -476,6 +476,21 @@ def save_connection_config(config: AppConfig) -> None:
     _save_config_file(existing)
 
 
+def save_model_config(config: AppConfig) -> None:
+    existing = _load_config_file()
+    existing.update(
+        {
+            "model_provider": config.model_provider,
+            "model": config.model,
+            "OPENAI_API_KEY": config.openai_api_key or "",
+            "ANTHROPIC_API_KEY": config.anthropic_api_key or "",
+            "GOOGLE_API_KEY": config.google_api_key or "",
+            "OLLAMA_BASE_URL": config.ollama_base_url,
+        }
+    )
+    _save_config_file(existing)
+
+
 def get_version() -> str:
     try:
         pyproject = toml.load(os.path.join(os.path.dirname(__file__), "..", "pyproject.toml"))
