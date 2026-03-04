@@ -17,10 +17,7 @@ It supports SQLAlchemy-compatible databases and multiple model providers:
 
 ## Demo Video
 
-Add your project demo video here:
-
-- `TODO: Replace this with your demo link`
-- Example: `https://github.com/<org>/<repo>/assets/<video-id>`
+![psqlomni demo](docs/psqlomnigif.gif)
 
 ## Install
 
