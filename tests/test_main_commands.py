@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from psqlomni import __main__ as main_mod
 from psqlomni.config import AppConfig
 from psqlomni.__main__ import PSqlomni
+from psqlomni.llm import MissingProviderDependencyError
 
 
 class FakeRenderer:
@@ -322,3 +323,23 @@ def test_connect_database_interactive_structured_mode(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "Connected to mysql://db.prod:3306/events" in output
     assert "Started new thread: thread-9" in output
+
+
+def test_main_reports_missing_provider_dependency(monkeypatch, capsys):
+    def fail_constructor():
+        raise MissingProviderDependencyError(
+            provider="google_gemini",
+            package="langchain-google-genai",
+            install_extra="google",
+        )
+
+    monkeypatch.setattr(main_mod, "PSqlomni", fail_constructor)
+
+    exit_code = main_mod.main()
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "Unable to start psqlomni: missing optional dependency for configured provider." in output
+    assert "Provider: google_gemini" in output
+    assert "Missing package: langchain-google-genai" in output
+    assert 'Install with: pip install "psqlomni[google]"' in output
