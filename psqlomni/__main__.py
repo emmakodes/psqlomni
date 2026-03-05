@@ -26,7 +26,7 @@ from psqlomni.config import (
 )
 from psqlomni.db import build_sql_database
 from psqlomni.graph.builder import build_sql_graph
-from psqlomni.llm import build_llm
+from psqlomni.llm import MissingProviderDependencyError, build_llm
 from psqlomni.tools.sql_tools import build_sql_tools
 from psqlomni.ui.renderer import ConsoleRenderer
 
@@ -596,9 +596,19 @@ Commands:
 
 
 def main():
-    psqlomni = PSqlomni()
+    try:
+        psqlomni = PSqlomni()
+    except MissingProviderDependencyError as exc:
+        print("Unable to start psqlomni: missing optional dependency for configured provider.")
+        print(f"Provider: {exc.provider}")
+        print(f"Missing package: {exc.package}")
+        print(f"Install with: pip install \"psqlomni[{exc.install_extra}]\"")
+        if exc.provider != "openai":
+            print("Fallback: set `model_provider` to `openai` in ~/.psqlomni.")
+        return 1
     psqlomni.chat_loop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
