@@ -25,7 +25,7 @@ ollama = ["langchain-ollama"]
 all-models = ["langchain-anthropic", "langchain-google-genai", "langchain-ollama"]
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.4.2"
+pytest = ">=8.4.2,<10.0.0"
 pytest-cov = "^6.2.1"
 ruff = "^0.15.4"
 
